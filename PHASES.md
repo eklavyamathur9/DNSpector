@@ -33,15 +33,17 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 
 ---
 
-## Phase 2 — Detection Quality Core
+## Phase 2 — Detection Quality Core ✅ *done*
 
 **Why:** this is the highest-value phase — it's the difference between "a script with an entropy check" and "a tool that understands DNS threats." See DOCUMENTATION.md §2.4 for the gap this closes.
 
-- [ ] Replace the fixed entropy threshold (3.5) with per-host/per-domain statistical baselining (rolling mean/stddev, z-score deviation)
-- [ ] Add query-frequency/burst analysis: unique subdomain-label count per parent domain per time window (tunneling signal independent of entropy)
-- [ ] Track NXDOMAIN ratio per source host (classic DGA-infected-host indicator)
-- [ ] Normalize domains against the public suffix / TLD before scoring entropy (score the attacker-controlled label, not the whole FQDN)
-- [ ] (Stretch) small DGA classifier (n-gram/logistic regression) trained on a public DGA dataset, as an alternative to the entropy heuristic
+- [x] Replace the fixed entropy threshold (3.5) with per-host/per-domain statistical baselining (rolling mean/stddev, z-score deviation) — `compute_host_baselines()` + `entropy_z_score()`, additive to (not a replacement for) the fixed threshold; `--z-score-threshold`, `--min-baseline-samples`
+- [x] Add query-frequency/burst analysis: unique subdomain-label count per parent domain per time window (tunneling signal independent of entropy) — `detect_subdomain_bursts()`; `--burst-window-seconds`, `--burst-unique-subdomain-threshold`
+- [x] Track NXDOMAIN ratio per source host (classic DGA-infected-host indicator) — `compute_nxdomain_ratios()`, correctly keyed by the client (`destination_ip` on a RESPONSE packet); `--nxdomain-ratio-threshold`, `--min-nxdomain-samples`
+- [x] Normalize domains against the public suffix / TLD before scoring entropy (score the attacker-controlled label, not the whole FQDN) — `parse_domain()` via `tldextract` (offline mode, bundled snapshot, no network calls)
+- [ ] (Stretch) small DGA classifier (n-gram/logistic regression) trained on a public DGA dataset, as an alternative to the entropy heuristic — not attempted, still a stretch goal
+
+*Landed 2026-08-20. New `tldextract` runtime dependency (offline mode only). `analyze_pcap()` now runs a two-pass pipeline: Pass 1 (`build_dns_record()` per packet) produces provisional records, Pass 2 (`apply_detection_signals()`) computes batch-level baselines/bursts/ratios and finalizes each record's `remark`. Detection thresholds bundled into a new `DetectionSettings` dataclass (`settings_from_args()`) rather than passed as loose parameters, to keep `analyze_pcap()`'s signature stable as Phase 3 adds more. Records gained new JSON fields: `registrable_domain`, `subdomain`, `entropy_z_score`, `timestamp`, `subdomain_burst`, `subdomain_burst_unique_count`, `host_nxdomain_ratio`. Test suite grew from 31 to 64 cases, plus an end-to-end smoke test against a synthetic pcap covering normal/tunneling-burst/DGA-NXDOMAIN traffic. See DOCUMENTATION.md §1.3c for the full design writeup and §1.4 for new known limitations (hard time-window boundaries, no cross-run persistence).*
 
 ---
 
@@ -113,6 +115,7 @@ Leaning toward **DNSpector** or **Sentry53** if/when this happens, since the roa
 ## Suggested resume bullets (update as phases land)
 
 - *"Built a Python-based DNS traffic analyzer implementing Shannon-entropy and behavioral-frequency heuristics to detect DGA malware and DNS-tunneling exfiltration, with automated JSON/PDF/SIEM-ready reporting."*
-- *"Reduced false-positive rate on domain-anomaly detection by replacing a fixed entropy threshold with per-host statistical baselining (z-score deviation)."* — Phase 2
+- *"Reduced false-positive rate on domain-anomaly detection by replacing a fixed entropy threshold with per-host statistical baselining (z-score deviation), and integrated public-suffix-aware domain parsing so entropy is scored on the registrant-controlled label instead of the full FQDN."* — Phase 2 ✅
+- *"Implemented a DNS-tunneling detector based on unique-subdomain-burst frequency per parent domain — a signal independent of any single query's entropy — plus per-client NXDOMAIN-ratio tracking for DGA-infected-host detection."* — Phase 2 ✅
 - *"Integrated threat-intelligence feed lookups (URLhaus) to convert heuristic alerts into confirmed IOC matches."* — Phase 3
-- *"Added CI (GitHub Actions) with a pytest suite covering entropy scoring, DNS flag parsing, and remark generation."* — Phase 1 (test suite already done in Phase 0; CI wiring is Phase 1)
+- *"Added CI (GitHub Actions) with a pytest suite covering entropy scoring, DNS flag parsing, and remark generation."* — Phase 1 ✅ (test suite already done in Phase 0; CI wiring is Phase 1)

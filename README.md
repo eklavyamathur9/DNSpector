@@ -9,12 +9,15 @@ The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze
 ## Features
 
 - **Packet Capture**: Captures DNS packets over UDP port 53 for a user-defined duration.
-- **Entropy Calculation**: Computes Shannon entropy for domain names to detect suspicious patterns.
+- **Public-suffix-aware Entropy Scoring**: Computes Shannon entropy over the registrant-controlled part of a domain (excluding the TLD), to detect DGA-style and DNS-tunneling-style randomness without a fixed public suffix like `.com` diluting the signal.
+- **Per-host Statistical Baselining**: Flags entropy that's anomalous (z-score) for a *specific* querying host, not just a single global cutoff - reduces false positives from naturally high-entropy but legitimate traffic.
+- **Subdomain-burst (DNS Tunneling) Detection**: Flags a parent domain receiving an unusually high number of *unique* subdomain queries within a short time window - a signal independent of any single query's entropy.
+- **NXDOMAIN-ratio Tracking**: Flags a host whose DNS responses are mostly failed lookups (NXDOMAIN) - a classic sign of a DGA-infected client cycling through candidate C2 domains.
 - **DNS Flag Parsing**: Decodes DNS flags into human-readable formats.
 - **Detailed Reporting**:
-    - **JSON Output**: Saves analysis results in a structured JSON file.
+    - **JSON Output**: Saves analysis results, including all detection signals, in a structured JSON file.
     - **PDF Report**: Generates a professional PDF report with detailed insights.
-- **Remarks Generation**: Provides remarks based on entropy and DNS flags to highlight potential issues.
+- **Remarks Generation**: Provides remarks combining all of the above signals to highlight potential issues.
 
 ---
 
@@ -55,6 +58,12 @@ Or configure it via CLI flags:
 sudo python Dns_Analyser.py --duration 30 --iface eth0 --entropy-threshold 4.0 --output-dir ./reports
 ```
 
+Detection thresholds are also tunable, e.g. to make subdomain-burst (tunneling) detection more sensitive on a short capture:
+
+```bash
+sudo python Dns_Analyser.py --burst-window-seconds 30 --burst-unique-subdomain-threshold 8 --z-score-threshold 2.5
+```
+
 Run `python Dns_Analyser.py --help` for the full list of options. Any of these can also be set as defaults in a JSON config file (see `config.example.json`) and passed with `--config`:
 
 ```bash
@@ -92,22 +101,27 @@ pytest tests/ -v
 
 ## Remarks and Insights
 
-- **High Entropy Domains**: Indicates potential DNS tunneling or DGA (Domain Generation Algorithm) activity.
+- **High Entropy Domains**: Indicates potential DNS tunneling or DGA (Domain Generation Algorithm) activity, either via a fixed threshold or a per-host statistical outlier (z-score).
+- **Subdomain Bursts**: Many unique subdomains queried under one parent domain in a short window - a DNS tunneling indicator independent of entropy.
+- **High NXDOMAIN Ratio**: A host whose responses are mostly failed lookups - a classic DGA-infected-client indicator.
 - **Refused Queries**: Highlights DNS queries refused by the server.
 - **Unsuccessful Responses**: Identifies misconfigurations or potential attacks.
+
+See [DOCUMENTATION.md](DOCUMENTATION.md) for the theory behind each of these signals.
 
 ---
 
 ## Dependencies
 
-- **Python 3.6+**
+- **Python 3.8+**
 - **Scapy**: For packet capture and analysis.
 - **NumPy**: For entropy calculation.
 - **ReportLab**: For generating PDF reports.
+- **tldextract**: For public-suffix-aware domain parsing (used offline, against its bundled snapshot - no network calls).
 
 Install dependencies using:
 ```bash
-pip install scapy numpy reportlab
+pip install -r requirements.txt
 ```
 
 ---

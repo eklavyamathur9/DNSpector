@@ -1,10 +1,14 @@
 import argparse
 import json
 import logging
+import statistics
+from collections import defaultdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 import numpy as np
+import tldextract
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -13,9 +17,22 @@ from scapy.all import DNS, DNSQR, IP, UDP, Packet, rdpcap, sniff, wrpcap
 logger = logging.getLogger("dns_analyzer")
 
 DEFAULT_ENTROPY_THRESHOLD = 3.5
+DEFAULT_Z_SCORE_THRESHOLD = 3.0
+DEFAULT_MIN_BASELINE_SAMPLES = 5
+DEFAULT_BURST_WINDOW_SECONDS = 60
+DEFAULT_BURST_UNIQUE_SUBDOMAIN_THRESHOLD = 15
+DEFAULT_NXDOMAIN_RATIO_THRESHOLD = 0.5
+DEFAULT_MIN_NXDOMAIN_SAMPLES = 5
+
 MARGIN_LEFT = 50
 MARGIN_TOP = 750
 LINE_SPACING = 20
+
+# Public-suffix-aware domain parser. suffix_list_urls=() disables fetching
+# an updated Public Suffix List over the network and uses the bundled
+# snapshot only, so this stays deterministic and works fully offline
+# (important for a security tool that may run in isolated environments).
+_TLD_EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=())
 
 # DNS Opcode / RCODE value -> name lookups (RFC 1035, RFC 6895).
 # Using dicts with a fallback instead of list indexing avoids IndexError
@@ -32,12 +49,64 @@ RCODES = {
 }
 
 
+@dataclass
+class DetectionSettings:
+    """Tunable thresholds for the detection heuristics below."""
+
+    entropy_threshold: float = DEFAULT_ENTROPY_THRESHOLD
+    z_score_threshold: float = DEFAULT_Z_SCORE_THRESHOLD
+    min_baseline_samples: int = DEFAULT_MIN_BASELINE_SAMPLES
+    burst_window_seconds: int = DEFAULT_BURST_WINDOW_SECONDS
+    burst_unique_subdomain_threshold: int = DEFAULT_BURST_UNIQUE_SUBDOMAIN_THRESHOLD
+    nxdomain_ratio_threshold: float = DEFAULT_NXDOMAIN_RATIO_THRESHOLD
+    min_nxdomain_samples: int = DEFAULT_MIN_NXDOMAIN_SAMPLES
+
+
+class DomainParts(NamedTuple):
+    registrable_domain: str  # "" if the public suffix couldn't be determined
+    subdomain: str  # "" if the query has no subdomain labels
+    scoring_label: str  # everything except the public suffix (TLD)
+
+
+class HostEntropyBaseline(NamedTuple):
+    mean: float
+    stdev: float
+    sample_count: int
+
+
+class NxdomainStats(NamedTuple):
+    ratio: float
+    sample_count: int
+
+
 def calculate_entropy(domain: str) -> float:
-    """Calculate Shannon entropy of a domain name."""
+    """Calculate Shannon entropy of a domain name (or domain label)."""
     if not domain:
         return 0.0
     prob = [float(domain.count(c)) / len(domain) for c in set(domain)]
     return -sum(p * np.log2(p) for p in prob)
+
+
+def parse_domain(domain: str) -> DomainParts:
+    """Split a domain into its public-suffix-aware parts.
+
+    The public suffix (TLD, e.g. 'com' or 'co.uk') is fixed and
+    low-entropy by construction, so including it when scoring entropy
+    dilutes the signal. scoring_label is everything the *registrant*
+    controls (subdomain + registrable-domain label), which is where DGA
+    randomness or DNS-tunneling-encoded data actually shows up.
+    """
+    clean = domain.rstrip(".")
+    ext = _TLD_EXTRACTOR(clean)
+    if not ext.domain or not ext.suffix:
+        return DomainParts(registrable_domain="", subdomain="", scoring_label=clean)
+    registrable_domain = f"{ext.domain}.{ext.suffix}"
+    scoring_parts = [part for part in (ext.subdomain, ext.domain) if part]
+    return DomainParts(
+        registrable_domain=registrable_domain,
+        subdomain=ext.subdomain,
+        scoring_label=".".join(scoring_parts),
+    )
 
 
 def parse_dns_flags(dns: DNS) -> Dict[str, str]:
@@ -62,10 +131,16 @@ def generate_remark(
     entropy: float,
     flags: Dict[str, str],
     entropy_threshold: float = DEFAULT_ENTROPY_THRESHOLD,
+    z_score: Optional[float] = None,
+    z_score_threshold: float = DEFAULT_Z_SCORE_THRESHOLD,
 ) -> str:
-    """Generate remarks based on entropy and DNS flags."""
+    """Generate a remark based on entropy, DNS flags, and (optionally) a
+    per-host entropy z-score computed by apply_detection_signals().
+    """
     if entropy > entropy_threshold:
         return "High entropy domain name - Possible DGA or DNS Tunneling"
+    if z_score is not None and z_score > z_score_threshold:
+        return f"Entropy anomalous for this host (z={z_score:.2f}) - Possible DGA or DNS Tunneling"
     if flags["rcode"] == "REFUSED":
         return "DNS query refused by the server"
     if flags["qr"] == "RESPONSE" and flags["rcode"] != "NOERROR":
@@ -78,6 +153,12 @@ def build_dns_record(packet: Packet, entropy_threshold: float) -> Optional[Dict[
 
     Returns None if the packet has no IP layer (e.g. non-IPv4 traffic),
     since source/destination cannot be determined in that case.
+
+    The remark here only reflects the fixed entropy threshold and DNS
+    flags - per-host statistical baselining, subdomain-burst detection,
+    and NXDOMAIN-ratio tracking all need the *full* batch of records to
+    compute, so apply_detection_signals() refines "remark" (and adds new
+    fields) afterward once every packet in the capture has been parsed.
     """
     if not packet.haslayer(IP):
         return None
@@ -86,7 +167,8 @@ def build_dns_record(packet: Packet, entropy_threshold: float) -> Optional[Dict[
     dns_query = (
         packet[DNSQR].qname.decode("utf-8") if packet.haslayer(DNSQR) else "Unknown"
     )
-    entropy = calculate_entropy(dns_query)
+    domain_parts = parse_domain(dns_query)
+    entropy = calculate_entropy(domain_parts.scoring_label)
     flags = parse_dns_flags(dns)
     remark = generate_remark(entropy, flags, entropy_threshold)
 
@@ -94,14 +176,166 @@ def build_dns_record(packet: Packet, entropy_threshold: float) -> Optional[Dict[
         "source_ip": packet[IP].src,
         "destination_ip": packet[IP].dst,
         "query": dns_query,
+        "registrable_domain": domain_parts.registrable_domain,
+        "subdomain": domain_parts.subdomain,
         "entropy": entropy,
+        "entropy_z_score": None,
+        "timestamp": float(packet.time),
         "qdcount": dns.qdcount,
         "ancount": dns.ancount,
         "nscount": dns.nscount,
         "arcount": dns.arcount,
         "flags": flags,
+        "subdomain_burst": False,
+        "subdomain_burst_unique_count": None,
+        "host_nxdomain_ratio": None,
         "remark": remark,
     }
+
+
+def compute_host_baselines(
+    records: List[Dict[str, Any]],
+    min_samples: int = DEFAULT_MIN_BASELINE_SAMPLES,
+) -> Dict[str, HostEntropyBaseline]:
+    """Compute a per-source-host entropy baseline (mean, population stdev)
+    from QUERY records in a batch. Hosts with fewer than min_samples
+    queries are excluded - too little data for a stable baseline.
+    """
+    entropies_by_host: Dict[str, List[float]] = defaultdict(list)
+    for record in records:
+        if record["flags"]["qr"] != "QUERY":
+            continue
+        entropies_by_host[record["source_ip"]].append(record["entropy"])
+
+    baselines: Dict[str, HostEntropyBaseline] = {}
+    for host, entropies in entropies_by_host.items():
+        if len(entropies) >= min_samples:
+            baselines[host] = HostEntropyBaseline(
+                mean=statistics.mean(entropies),
+                stdev=statistics.pstdev(entropies),
+                sample_count=len(entropies),
+            )
+    return baselines
+
+
+def entropy_z_score(entropy: float, baseline: Optional[HostEntropyBaseline]) -> Optional[float]:
+    """Return how many standard deviations `entropy` is from a host's
+    baseline, or None if there's no baseline or it has zero variance
+    (a constant baseline can't meaningfully flag a deviation via z-score).
+    """
+    if baseline is None or baseline.stdev == 0:
+        return None
+    return (entropy - baseline.mean) / baseline.stdev
+
+
+def detect_subdomain_bursts(
+    records: List[Dict[str, Any]],
+    window_seconds: int = DEFAULT_BURST_WINDOW_SECONDS,
+    unique_threshold: int = DEFAULT_BURST_UNIQUE_SUBDOMAIN_THRESHOLD,
+) -> Dict[Tuple[str, int], Set[str]]:
+    """Group QUERY records by (registrable_domain, time-window bucket) and
+    collect the set of unique subdomain labels queried in each bucket.
+    Returns only buckets meeting unique_threshold - many unique
+    subdomains under one parent domain in a short window is a classic
+    DNS-tunneling signal, independent of any single query's entropy.
+    """
+    buckets: Dict[Tuple[str, int], Set[str]] = defaultdict(set)
+    for record in records:
+        if record["flags"]["qr"] != "QUERY":
+            continue
+        if not record["registrable_domain"] or not record["subdomain"]:
+            continue
+        bucket = int(record["timestamp"] // window_seconds)
+        buckets[(record["registrable_domain"], bucket)].add(record["subdomain"])
+
+    return {key: subs for key, subs in buckets.items() if len(subs) >= unique_threshold}
+
+
+def compute_nxdomain_ratios(
+    records: List[Dict[str, Any]],
+    min_samples: int = DEFAULT_MIN_NXDOMAIN_SAMPLES,
+) -> Dict[str, NxdomainStats]:
+    """Compute, per querying client, the fraction of DNS responses that
+    came back NXDOMAIN. A client with a high NXDOMAIN ratio is a classic
+    indicator of a DGA-infected host cycling through candidate C2
+    domains until one resolves.
+
+    Keyed by destination_ip because on a RESPONSE packet the client is
+    the destination, not the source (the source is the answering DNS
+    server) - getting this backwards would baseline the wrong host.
+    """
+    counts: Dict[str, List[int]] = defaultdict(lambda: [0, 0])  # [nxdomain, total]
+    for record in records:
+        if record["flags"]["qr"] != "RESPONSE":
+            continue
+        client = record["destination_ip"]
+        counts[client][1] += 1
+        if record["flags"]["rcode"] == "NXDOMAIN":
+            counts[client][0] += 1
+
+    return {
+        host: NxdomainStats(ratio=nx / total, sample_count=total)
+        for host, (nx, total) in counts.items()
+        if total >= min_samples
+    }
+
+
+def apply_detection_signals(
+    records: List[Dict[str, Any]],
+    settings: DetectionSettings,
+) -> List[Dict[str, Any]]:
+    """Refine records in place with batch-level detection signals that a
+    single packet can't produce on its own: per-host entropy baselining
+    (z-score), subdomain-burst detection, and per-client NXDOMAIN ratio.
+    Also finalizes each record's "remark" to reflect all signals.
+    """
+    baselines = compute_host_baselines(records, settings.min_baseline_samples)
+    bursts = detect_subdomain_bursts(
+        records, settings.burst_window_seconds, settings.burst_unique_subdomain_threshold
+    )
+    nxdomain_ratios = compute_nxdomain_ratios(records, settings.min_nxdomain_samples)
+
+    for record in records:
+        is_query = record["flags"]["qr"] == "QUERY"
+
+        baseline = baselines.get(record["source_ip"]) if is_query else None
+        z_score = entropy_z_score(record["entropy"], baseline)
+        record["entropy_z_score"] = z_score
+
+        remark = generate_remark(
+            record["entropy"], record["flags"], settings.entropy_threshold,
+            z_score=z_score, z_score_threshold=settings.z_score_threshold,
+        )
+        notes: List[str] = []
+
+        if is_query and record["registrable_domain"] and record["subdomain"]:
+            bucket = int(record["timestamp"] // settings.burst_window_seconds)
+            burst_key = (record["registrable_domain"], bucket)
+            if burst_key in bursts:
+                unique_count = len(bursts[burst_key])
+                record["subdomain_burst"] = True
+                record["subdomain_burst_unique_count"] = unique_count
+                notes.append(
+                    f"{unique_count} unique subdomains under {record['registrable_domain']} "
+                    f"within {settings.burst_window_seconds}s - possible DNS tunneling"
+                )
+
+        if not is_query:
+            nx_stats = nxdomain_ratios.get(record["destination_ip"])
+            if nx_stats is not None:
+                record["host_nxdomain_ratio"] = nx_stats.ratio
+                if nx_stats.ratio >= settings.nxdomain_ratio_threshold:
+                    notes.append(
+                        f"host {record['destination_ip']} has a high NXDOMAIN ratio "
+                        f"({nx_stats.ratio:.0%} of {nx_stats.sample_count} responses) - "
+                        f"possible DGA client"
+                    )
+
+        if notes:
+            remark = remark + " | " + " | ".join(notes)
+        record["remark"] = remark
+
+    return records
 
 
 def capture_dns_packets(duration: int, iface: Optional[str], pcap_file: str) -> List[Packet]:
@@ -142,9 +376,11 @@ def analyze_pcap(
     pcap_file: str,
     json_file: str,
     report_file: str,
-    entropy_threshold: float = DEFAULT_ENTROPY_THRESHOLD,
+    settings: Optional[DetectionSettings] = None,
 ) -> List[Dict[str, Any]]:
     """Analyze the captured DNS packets and save details to JSON and a PDF report."""
+    settings = settings or DetectionSettings()
+
     pcap_path = Path(pcap_file)
     if not pcap_path.exists():
         raise FileNotFoundError(f"Capture file not found: {pcap_file}")
@@ -155,8 +391,21 @@ def analyze_pcap(
     except Exception as exc:
         raise ValueError(f"Failed to read pcap file {pcap_file}: {exc}") from exc
 
-    analysis_results: List[Dict[str, Any]] = []
+    records: List[Dict[str, Any]] = []
     skipped = 0
+    for packet in captured_packets:
+        if not (packet.haslayer(DNS) and packet.haslayer(UDP)):
+            continue
+        record = build_dns_record(packet, settings.entropy_threshold)
+        if record is None:
+            skipped += 1
+            continue
+        records.append(record)
+
+    if skipped:
+        logger.warning("Skipped %d DNS packet(s) without an IP layer.", skipped)
+
+    records = apply_detection_signals(records, settings)
 
     c = canvas.Canvas(report_file, pagesize=letter)
     c.setFont("Helvetica-Bold", 14)
@@ -164,18 +413,12 @@ def analyze_pcap(
     c.setFont("Helvetica", 12)
     y_position = MARGIN_TOP
 
-    for packet in captured_packets:
-        if not (packet.haslayer(DNS) and packet.haslayer(UDP)):
-            continue
-
-        record = build_dns_record(packet, entropy_threshold)
-        if record is None:
-            skipped += 1
-            continue
-        analysis_results.append(record)
-
+    for record in records:
         formatted_flags = format_flags(record["flags"])
         flag_lines = formatted_flags.split("\n")
+        z_score_text = (
+            f"{record['entropy_z_score']:.2f}" if record["entropy_z_score"] is not None else "N/A"
+        )
 
         c.setFont("Helvetica-Bold", 12)
         c.drawString(MARGIN_LEFT, y_position, f"Query: {record['query']}")
@@ -185,7 +428,11 @@ def analyze_pcap(
             y_position - LINE_SPACING,
             f"Source: {record['source_ip']} -> Destination: {record['destination_ip']}",
         )
-        c.drawString(MARGIN_LEFT, y_position - 2 * LINE_SPACING, f"Entropy: {record['entropy']:.4f}")
+        c.drawString(
+            MARGIN_LEFT,
+            y_position - 2 * LINE_SPACING,
+            f"Entropy: {record['entropy']:.4f} (z-score: {z_score_text})",
+        )
         c.drawString(MARGIN_LEFT, y_position - 3 * LINE_SPACING, "Flags:")
         for i, line in enumerate(flag_lines):
             c.drawString(MARGIN_LEFT + 20, y_position - (4 + i) * LINE_SPACING, line)
@@ -209,15 +456,12 @@ def analyze_pcap(
 
     c.save()
 
-    if skipped:
-        logger.warning("Skipped %d DNS packet(s) without an IP layer.", skipped)
-
     with open(json_file, "w") as f:
-        json.dump(analysis_results, f, indent=4)
+        json.dump(records, f, indent=4)
     logger.info("Analysis results saved to %s", json_file)
     logger.info("Report saved to %s", report_file)
 
-    return analysis_results
+    return records
 
 
 def load_config(path: Optional[str]) -> Dict[str, Any]:
@@ -269,6 +513,54 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help=f"Entropy above which a domain is flagged as high-entropy (default: {DEFAULT_ENTROPY_THRESHOLD})",
     )
     parser.add_argument(
+        "--z-score-threshold", type=float,
+        default=config.get("z_score_threshold", DEFAULT_Z_SCORE_THRESHOLD),
+        help=(
+            "Per-host entropy z-score above which a query is flagged as anomalous "
+            f"(default: {DEFAULT_Z_SCORE_THRESHOLD})"
+        ),
+    )
+    parser.add_argument(
+        "--min-baseline-samples", type=int,
+        default=config.get("min_baseline_samples", DEFAULT_MIN_BASELINE_SAMPLES),
+        help=(
+            "Minimum queries from a host before it gets its own entropy baseline "
+            f"(default: {DEFAULT_MIN_BASELINE_SAMPLES})"
+        ),
+    )
+    parser.add_argument(
+        "--burst-window-seconds", type=int,
+        default=config.get("burst_window_seconds", DEFAULT_BURST_WINDOW_SECONDS),
+        help=(
+            "Time window for subdomain-burst (DNS tunneling) detection, in seconds "
+            f"(default: {DEFAULT_BURST_WINDOW_SECONDS})"
+        ),
+    )
+    parser.add_argument(
+        "--burst-unique-subdomain-threshold", type=int,
+        default=config.get("burst_unique_subdomain_threshold", DEFAULT_BURST_UNIQUE_SUBDOMAIN_THRESHOLD),
+        help=(
+            "Unique subdomains under one parent domain within the burst window to flag as "
+            f"possible tunneling (default: {DEFAULT_BURST_UNIQUE_SUBDOMAIN_THRESHOLD})"
+        ),
+    )
+    parser.add_argument(
+        "--nxdomain-ratio-threshold", type=float,
+        default=config.get("nxdomain_ratio_threshold", DEFAULT_NXDOMAIN_RATIO_THRESHOLD),
+        help=(
+            "Fraction of NXDOMAIN responses to a client above which it's flagged as a "
+            f"possible DGA client (default: {DEFAULT_NXDOMAIN_RATIO_THRESHOLD})"
+        ),
+    )
+    parser.add_argument(
+        "--min-nxdomain-samples", type=int,
+        default=config.get("min_nxdomain_samples", DEFAULT_MIN_NXDOMAIN_SAMPLES),
+        help=(
+            "Minimum responses to a client before its NXDOMAIN ratio is evaluated "
+            f"(default: {DEFAULT_MIN_NXDOMAIN_SAMPLES})"
+        ),
+    )
+    parser.add_argument(
         "--pcap-file", default=config.get("pcap_file", "dns_capture.pcap"),
         help="Filename for the captured pcap (default: dns_capture.pcap)",
     )
@@ -288,10 +580,23 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def settings_from_args(args: argparse.Namespace) -> DetectionSettings:
+    return DetectionSettings(
+        entropy_threshold=args.entropy_threshold,
+        z_score_threshold=args.z_score_threshold,
+        min_baseline_samples=args.min_baseline_samples,
+        burst_window_seconds=args.burst_window_seconds,
+        burst_unique_subdomain_threshold=args.burst_unique_subdomain_threshold,
+        nxdomain_ratio_threshold=args.nxdomain_ratio_threshold,
+        min_nxdomain_samples=args.min_nxdomain_samples,
+    )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s [%(levelname)s] %(message)s")
     logger.info("DNS Analyzer - developed by CipherxHub")
+    logger.debug("Detection settings: %s", asdict(settings_from_args(args)))
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -309,7 +614,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     try:
-        analyze_pcap(pcap_file, json_file, report_file, args.entropy_threshold)
+        analyze_pcap(pcap_file, json_file, report_file, settings_from_args(args))
     except (FileNotFoundError, ValueError) as exc:
         logger.error(str(exc))
         return 1
