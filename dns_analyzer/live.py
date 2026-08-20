@@ -1,13 +1,14 @@
 """Live/streaming capture-and-detect pipeline (Phase 4).
 
 Unlike analysis.analyze_pcap() (a full two/three-pass batch analysis run
-after capture completes), this runs detection - and alerting - inline as
-each packet arrives, via LiveDetectionEngine's incremental algorithms
-instead of detection.py's batch functions. The full record list is still
-accumulated and written to JSON/PDF at the end, exactly like batch mode,
-so both modes produce the same *shape* of output - live mode just gets
-you per-packet alerts (and a causally-online statistical baseline - see
-DOCUMENTATION.md) during the capture instead of only after it ends.
+after capture completes), this runs detection - and alerting/forwarding -
+inline as each packet arrives, via LiveDetectionEngine's incremental
+algorithms instead of detection.py's batch functions. The full record
+list is still accumulated and written to JSON/PDF (and CSV/STIX, if
+requested) at the end, exactly like batch mode, so both modes produce
+the same *shape* of output - live mode just gets you per-packet alerts
+(and a causally-online statistical baseline - see DOCUMENTATION.md)
+during the capture instead of only after it ends.
 """
 
 import json
@@ -19,7 +20,9 @@ from scapy.all import Packet
 from dns_analyzer.alerting import WebhookAlerter, classify_severity
 from dns_analyzer.capture import capture_dns_packets
 from dns_analyzer.detection import DetectionSettings, LiveDetectionEngine, build_dns_record
+from dns_analyzer.export import generate_csv_report, write_stix_bundle
 from dns_analyzer.report import generate_pdf_report
+from dns_analyzer.syslog_forwarder import SyslogCefForwarder
 from dns_analyzer.threat_intel import ThreatIntelChecker, annotate_threat_intel
 
 logger = logging.getLogger(__name__)
@@ -34,10 +37,14 @@ def capture_and_detect_live(
     settings: Optional[DetectionSettings] = None,
     threat_intel_checker: Optional[ThreatIntelChecker] = None,
     alerter: Optional[WebhookAlerter] = None,
+    csv_file: Optional[str] = None,
+    stix_file: Optional[str] = None,
+    syslog_forwarder: Optional[SyslogCefForwarder] = None,
 ) -> List[Dict[str, Any]]:
     """Capture DNS traffic and run detection (and optional threat-intel /
-    alerting) on each packet as it arrives, then write the same JSON/PDF
-    output as the batch pipeline once capture ends.
+    alerting / syslog forwarding) on each packet as it arrives, then
+    write the same JSON/PDF (+ CSV/STIX) output as the batch pipeline
+    once capture ends.
     """
     settings = settings or DetectionSettings()
     engine = LiveDetectionEngine(settings)
@@ -59,11 +66,23 @@ def capture_and_detect_live(
             if severity:
                 logger.warning("[%s] %s -> %s", severity.upper(), record["query"], record["remark"])
 
+        if syslog_forwarder is not None:
+            syslog_forwarder.maybe_forward(record)
+
     packets = capture_dns_packets(duration, iface, pcap_file, on_packet=process_packet)
     if not packets:
         return records
 
     generate_pdf_report(records, report_file)
+
+    if csv_file:
+        generate_csv_report(records, csv_file)
+        logger.info("CSV export saved to %s", csv_file)
+
+    if stix_file:
+        write_stix_bundle(records, stix_file)
+        logger.info("STIX bundle saved to %s", stix_file)
+
     with open(json_file, "w") as f:
         json.dump(records, f, indent=4)
     logger.info("Analysis results saved to %s", json_file)

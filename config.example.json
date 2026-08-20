@@ -14,8 +14,15 @@
   "live": false,
   "enable_alerts": false,
   "alert_min_severity": "high",
+  "enable_syslog": false,
+  "syslog_port": 514,
+  "syslog_protocol": "udp",
+  "syslog_min_severity": "info",
+  "export_stix": false,
   "pcap_file": "dns_capture.pcap",
   "json_file": "output.json",
   "report_file": "dns_report.pdf",
+  "csv_file": "output.csv",
+  "stix_file": "output.stix.json",
   "log_level": "INFO"
 }

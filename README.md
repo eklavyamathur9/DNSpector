@@ -16,6 +16,9 @@ The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze
 - **Threat-Intel Enrichment** (opt-in): Checks observed domains against [OpenPhish](https://openphish.com/) (free, keyless), [URLhaus](https://urlhaus.abuse.ch/) (free, needs an Auth-Key), and [VirusTotal](https://www.virustotal.com/) (needs an API key), turning a heuristic "looks suspicious" verdict into a confirmed "is on a real-world blocklist" one.
 - **Live/Streaming Mode** (opt-in): Runs detection inline as each packet arrives (`--live`), using incremental/streaming versions of the same algorithms, instead of only after the whole capture window ends.
 - **Webhook Alerting** (opt-in): Sends a Slack-/Discord-compatible webhook alert for records at or above a configurable severity - most useful combined with `--live`, so alerts fire the moment an anomaly is observed.
+- **Syslog/CEF Forwarding** (opt-in): Forwards records as CEF-formatted syslog messages to a SIEM (Splunk, QRadar, ArcSight, or any CEF-aware syslog listener) over UDP or TCP.
+- **CSV Export**: A flattened CSV alongside the JSON/PDF output, for spreadsheet pivoting or CSV-based SIEM ingestion.
+- **STIX 2.1 Indicator Export** (opt-in): Writes a STIX bundle of Indicator objects for domains confirmed malicious by threat intel, for sharing with other tooling.
 - **DNS Flag Parsing**: Decodes DNS flags into human-readable formats.
 - **Detailed Reporting**:
     - **JSON Output**: Saves analysis results, including all detection signals, in a structured JSON file.
@@ -126,6 +129,28 @@ Alerting also works in the default (non-`--live`) batch mode - alerts just fire 
 
 ---
 
+## Interoperability - CSV, Syslog/CEF, and STIX Export
+
+A flattened **CSV** is written alongside JSON/PDF by default (`--csv-file`, `output.csv`) - no flags needed.
+
+**Syslog/CEF forwarding** sends each record as a CEF-formatted syslog message to a SIEM, over UDP or TCP:
+
+```bash
+sudo python Dns_Analyser.py --enable-syslog --syslog-host siem.internal --syslog-port 514
+```
+
+Unlike webhook alerting's "high" default, syslog forwarding defaults to `--syslog-min-severity info` - the point of sending data to a SIEM is usually full-fidelity event history for later search/correlation, not just the loud stuff. Tune it down to `high`/`critical` if you only want a SIEM copy of what would also trigger a webhook alert.
+
+**STIX 2.1 export** writes one Indicator object per unique domain confirmed malicious by threat intel (only useful combined with `--enable-threat-intel`):
+
+```bash
+sudo python Dns_Analyser.py --enable-threat-intel --export-stix --stix-file iocs.json
+```
+
+Both work in batch mode (written/forwarded once analysis completes) and `--live` mode (syslog forwarding fires inline per record, same as webhook alerting; CSV/STIX are still written once at the end, since they're whole-batch artifacts).
+
+---
+
 ## Project Structure
 
 The implementation lives in the `dns_analyzer/` package, split by concern:
@@ -136,9 +161,11 @@ The implementation lives in the `dns_analyzer/` package, split by concern:
 | `detection.py` | Per-packet + batch-level anomaly detection (baselining, bursts, NXDOMAIN ratio), plus streaming/incremental equivalents for live mode |
 | `threat_intel.py` | OpenPhish/URLhaus/VirusTotal feed checks, caching, rate limiting |
 | `alerting.py` | Severity classification + webhook alerting |
+| `syslog_forwarder.py` | CEF formatting + syslog forwarding for SIEM ingestion |
+| `export.py` | CSV export + STIX 2.1 indicator bundle export |
 | `capture.py` | Packet capture via scapy (batch or with an inline callback for live mode) |
-| `analysis.py` | Orchestrates the batch pcap-in, JSON+PDF-out pipeline |
-| `live.py` | Orchestrates the live/streaming capture-detect-alert pipeline |
+| `analysis.py` | Orchestrates the batch pcap-in, JSON+PDF(+CSV/STIX/syslog)-out pipeline |
+| `live.py` | Orchestrates the live/streaming capture-detect-alert(-forward) pipeline |
 | `report.py` | PDF report rendering |
 | `config.py` | JSON config file loading |
 | `cli.py` | Argument parsing and the `main()` entry point |
@@ -149,7 +176,7 @@ The implementation lives in the `dns_analyzer/` package, split by concern:
 
 ## Running Tests
 
-The full pipeline - entropy scoring, DNS flag parsing, statistical baselining (batch and streaming), burst/NXDOMAIN detection (batch and streaming), threat-intel checks and webhook alerting (via injected fake fetchers/senders, no real network calls), CLI parsing, packet capture (via a monkeypatched `sniff()`), and end-to-end synthetic-pcap tests for both batch and live pipelines - is covered by a `pytest` suite in `tests/`, organized to mirror the `dns_analyzer/` package.
+The full pipeline - entropy scoring, DNS flag parsing, statistical baselining (batch and streaming), burst/NXDOMAIN detection (batch and streaming), threat-intel checks, webhook alerting, and syslog/CEF forwarding (all via injected fake fetchers/senders, no real network calls), CSV/STIX export, CLI parsing, packet capture (via a monkeypatched `sniff()`), and end-to-end synthetic-pcap tests for both batch and live pipelines - is covered by a `pytest` suite in `tests/`, organized to mirror the `dns_analyzer/` package.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -163,6 +190,8 @@ pytest tests/ -v
 - **dns_capture.pcap**: Raw captured DNS packets.
 - **output.json**: JSON file containing detailed analysis results.
 - **dns_report.pdf**: PDF report summarizing the analysis.
+- **output.csv**: Flattened CSV of the same records, for spreadsheets/SIEM CSV ingest (always written).
+- **output.stix.json**: STIX 2.1 indicator bundle for confirmed-malicious domains (only if `--export-stix` is set).
 
 ---
 

@@ -1,3 +1,5 @@
+import csv
+import json
 import time
 
 import pytest
@@ -6,6 +8,7 @@ from scapy.all import DNS, DNSQR, IP, UDP, wrpcap
 from dns_analyzer.alerting import AlertSettings, WebhookAlerter
 from dns_analyzer.analysis import analyze_pcap
 from dns_analyzer.detection import DetectionSettings
+from dns_analyzer.syslog_forwarder import SyslogCefForwarder, SyslogSettings
 from dns_analyzer.threat_intel import ThreatIntelChecker, ThreatIntelSettings
 
 
@@ -139,3 +142,74 @@ class TestAnalyzePcapWithAlerting:
         assert records[0]["severity"] == "high"
         assert records[1]["severity"] == "info"
         assert len(sent) == 1
+
+
+class TestAnalyzePcapExports:
+    def test_csv_export_written_when_csv_file_given(self, tmp_path):
+        packets = [_make_query("192.168.1.10", "google.com", t=time.time())]
+        pcap_file = tmp_path / "capture.pcap"
+        wrpcap(str(pcap_file), packets)
+
+        csv_file = tmp_path / "out.csv"
+        analyze_pcap(
+            str(pcap_file), str(tmp_path / "out.json"), str(tmp_path / "out.pdf"),
+            DetectionSettings(), csv_file=str(csv_file),
+        )
+
+        assert csv_file.exists()
+        with open(csv_file, newline="") as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 1
+        assert rows[0]["query"] == "google.com."
+
+    def test_no_csv_written_when_csv_file_not_given(self, tmp_path):
+        packets = [_make_query("192.168.1.10", "google.com", t=time.time())]
+        pcap_file = tmp_path / "capture.pcap"
+        wrpcap(str(pcap_file), packets)
+
+        analyze_pcap(str(pcap_file), str(tmp_path / "out.json"), str(tmp_path / "out.pdf"), DetectionSettings())
+
+        assert not (tmp_path / "output.csv").exists()
+
+    def test_stix_bundle_written_when_stix_file_given(self, tmp_path):
+        packets = [_make_query("192.168.1.10", "evil.com", t=time.time())]
+        pcap_file = tmp_path / "capture.pcap"
+        wrpcap(str(pcap_file), packets)
+
+        checker = ThreatIntelChecker(
+            ThreatIntelSettings(urlhaus_api_key="test-key"),
+            urlhaus_fetcher=lambda domain, api_key, timeout: {"query_status": "ok", "url_count": "1"},
+        )
+        stix_file = tmp_path / "out.stix.json"
+        analyze_pcap(
+            str(pcap_file), str(tmp_path / "out.json"), str(tmp_path / "out.pdf"),
+            DetectionSettings(), threat_intel_checker=checker, stix_file=str(stix_file),
+        )
+
+        assert stix_file.exists()
+        bundle = json.loads(stix_file.read_text())
+        assert bundle["type"] == "bundle"
+        assert len(bundle["objects"]) == 1
+        assert "evil.com" in bundle["objects"][0]["pattern"]
+
+    def test_syslog_forwarder_invoked_for_each_record(self, tmp_path):
+        packets = [
+            _make_query("192.168.1.10", "x7q9zk3m1p8wr2nb.evil.com", t=time.time()),
+            _make_query("192.168.1.10", "google.com", t=time.time()),
+        ]
+        pcap_file = tmp_path / "capture.pcap"
+        wrpcap(str(pcap_file), packets)
+
+        sent = []
+        forwarder = SyslogCefForwarder(
+            SyslogSettings(enabled=True, host="siem.internal", min_severity="info"),
+            sender=sent.append,
+        )
+
+        analyze_pcap(
+            str(pcap_file), str(tmp_path / "out.json"), str(tmp_path / "out.pdf"),
+            DetectionSettings(entropy_threshold=3.5), syslog_forwarder=forwarder,
+        )
+
+        assert len(sent) == 2
+        assert all(message.startswith("CEF:0|") for message in sent)

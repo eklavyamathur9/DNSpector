@@ -27,6 +27,12 @@ from dns_analyzer.detection import (
     DetectionSettings,
 )
 from dns_analyzer.live import capture_and_detect_live
+from dns_analyzer.syslog_forwarder import (
+    DEFAULT_SYSLOG_MIN_SEVERITY,
+    DEFAULT_SYSLOG_PORT,
+    SyslogCefForwarder,
+    SyslogSettings,
+)
 from dns_analyzer.threat_intel import (
     DEFAULT_CACHE_TTL_SECONDS,
     ThreatIntelChecker,
@@ -188,6 +194,43 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help=f"Minimum severity to alert on: {', '.join(SEVERITY_LEVELS)} (default: {DEFAULT_ALERT_MIN_SEVERITY})",
     )
     parser.add_argument(
+        "--enable-syslog", action="store_true",
+        default=config.get("enable_syslog", False),
+        help=(
+            "Forward records at or above --syslog-min-severity as CEF-formatted syslog "
+            "messages, for SIEM ingestion (Splunk, QRadar, ArcSight, etc). Off by default."
+        ),
+    )
+    parser.add_argument(
+        "--syslog-host", default=config.get("syslog_host"),
+        help="Syslog server hostname/IP to forward CEF messages to (only used if --enable-syslog is set)",
+    )
+    parser.add_argument(
+        "--syslog-port", type=int, default=config.get("syslog_port", DEFAULT_SYSLOG_PORT),
+        help=f"Syslog server port (default: {DEFAULT_SYSLOG_PORT})",
+    )
+    parser.add_argument(
+        "--syslog-protocol", choices=["udp", "tcp"],
+        default=config.get("syslog_protocol", "udp"),
+        help="Transport protocol for syslog forwarding (default: udp)",
+    )
+    parser.add_argument(
+        "--syslog-min-severity", choices=SEVERITY_LEVELS,
+        default=config.get("syslog_min_severity", DEFAULT_SYSLOG_MIN_SEVERITY),
+        help=(
+            "Minimum severity to forward to syslog - defaults to 'info' (forward "
+            f"everything), unlike --alert-min-severity's 'high' default (default: {DEFAULT_SYSLOG_MIN_SEVERITY})"
+        ),
+    )
+    parser.add_argument(
+        "--export-stix", action="store_true",
+        default=config.get("export_stix", False),
+        help=(
+            "Write a STIX 2.1 indicator bundle for domains confirmed malicious by threat "
+            "intel (only useful combined with --enable-threat-intel). Off by default."
+        ),
+    )
+    parser.add_argument(
         "--pcap-file", default=config.get("pcap_file", "dns_capture.pcap"),
         help="Filename for the captured pcap (default: dns_capture.pcap)",
     )
@@ -198,6 +241,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--report-file", default=config.get("report_file", "dns_report.pdf"),
         help="Filename for the PDF report (default: dns_report.pdf)",
+    )
+    parser.add_argument(
+        "--csv-file", default=config.get("csv_file", "output.csv"),
+        help="Filename for the CSV export, written alongside JSON/PDF (default: output.csv)",
+    )
+    parser.add_argument(
+        "--stix-file", default=config.get("stix_file", "output.stix.json"),
+        help="Filename for the STIX bundle, if --export-stix is set (default: output.stix.json)",
     )
     parser.add_argument(
         "--log-level", default=config.get("log_level", "INFO"),
@@ -236,6 +287,16 @@ def alert_settings_from_args(args: argparse.Namespace) -> AlertSettings:
     )
 
 
+def syslog_settings_from_args(args: argparse.Namespace) -> SyslogSettings:
+    return SyslogSettings(
+        enabled=args.enable_syslog,
+        host=args.syslog_host,
+        port=args.syslog_port,
+        protocol=args.syslog_protocol,
+        min_severity=args.syslog_min_severity,
+    )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s [%(levelname)s] %(message)s")
@@ -247,6 +308,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     pcap_file = str(output_dir / args.pcap_file)
     json_file = str(output_dir / args.json_file)
     report_file = str(output_dir / args.report_file)
+    csv_file = str(output_dir / args.csv_file)
+    stix_file = str(output_dir / args.stix_file) if args.export_stix else None
 
     threat_intel_settings = threat_intel_settings_from_args(args)
     threat_intel_checker = ThreatIntelChecker(threat_intel_settings) if threat_intel_settings.enabled else None
@@ -267,33 +330,52 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             logger.warning("--enable-alerts was set but no webhook URL was configured; alerting is disabled.")
 
+    syslog_settings = syslog_settings_from_args(args)
+    syslog_forwarder = None
+    if syslog_settings.enabled:
+        if syslog_settings.host:
+            syslog_forwarder = SyslogCefForwarder(syslog_settings)
+            logger.info(
+                "Syslog/CEF forwarding enabled (%s:%s/%s, min severity: %s).",
+                syslog_settings.host, syslog_settings.port, syslog_settings.protocol, syslog_settings.min_severity,
+            )
+        else:
+            logger.warning("--enable-syslog was set but no syslog host was configured; forwarding is disabled.")
+
     settings = settings_from_args(args)
 
-    if args.live:
+    try:
+        if args.live:
+            try:
+                records = capture_and_detect_live(
+                    args.duration, args.iface, pcap_file, json_file, report_file,
+                    settings, threat_intel_checker, alerter, csv_file, stix_file, syslog_forwarder,
+                )
+            except (PermissionError, OSError):
+                return 1
+            if not records:
+                logger.warning("No DNS traffic captured; nothing to report.")
+            return 0
+
         try:
-            records = capture_and_detect_live(
-                args.duration, args.iface, pcap_file, json_file, report_file,
-                settings, threat_intel_checker, alerter,
-            )
+            packets = capture_dns_packets(args.duration, args.iface, pcap_file)
         except (PermissionError, OSError):
             return 1
-        if not records:
-            logger.warning("No DNS traffic captured; nothing to report.")
+
+        if not packets:
+            logger.warning("No DNS traffic captured; skipping analysis.")
+            return 0
+
+        try:
+            analyze_pcap(
+                pcap_file, json_file, report_file,
+                settings, threat_intel_checker, alerter, csv_file, stix_file, syslog_forwarder,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error(str(exc))
+            return 1
+
         return 0
-
-    try:
-        packets = capture_dns_packets(args.duration, args.iface, pcap_file)
-    except (PermissionError, OSError):
-        return 1
-
-    if not packets:
-        logger.warning("No DNS traffic captured; skipping analysis.")
-        return 0
-
-    try:
-        analyze_pcap(pcap_file, json_file, report_file, settings, threat_intel_checker, alerter)
-    except (FileNotFoundError, ValueError) as exc:
-        logger.error(str(exc))
-        return 1
-
-    return 0
+    finally:
+        if syslog_forwarder is not None:
+            syslog_forwarder.close()

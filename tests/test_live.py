@@ -1,3 +1,4 @@
+import csv
 import json
 
 import pytest
@@ -7,6 +8,7 @@ import dns_analyzer.capture as capture_module
 from dns_analyzer.alerting import AlertSettings, WebhookAlerter
 from dns_analyzer.detection import DetectionSettings
 from dns_analyzer.live import capture_and_detect_live
+from dns_analyzer.syslog_forwarder import SyslogCefForwarder, SyslogSettings
 from dns_analyzer.threat_intel import OpenPhishFeed, ThreatIntelChecker, ThreatIntelSettings
 
 
@@ -144,3 +146,47 @@ class TestCaptureAndDetectLive:
                 pcap_file=str(tmp_path / "capture.pcap"),
                 json_file=str(tmp_path / "out.json"), report_file=str(tmp_path / "out.pdf"),
             )
+
+    def test_csv_export_written_when_csv_file_given(self, monkeypatch, tmp_path):
+        def fake_sniff(**kwargs):
+            kwargs["prn"](_query("192.168.1.10", "google.com", t=1000.0))
+
+        monkeypatch.setattr(capture_module, "sniff", fake_sniff)
+
+        csv_file = tmp_path / "out.csv"
+        capture_and_detect_live(
+            duration=5, iface=None,
+            pcap_file=str(tmp_path / "capture.pcap"),
+            json_file=str(tmp_path / "out.json"), report_file=str(tmp_path / "out.pdf"),
+            csv_file=str(csv_file),
+        )
+
+        assert csv_file.exists()
+        with open(csv_file, newline="") as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 1
+        assert rows[0]["query"] == "google.com."
+
+    def test_syslog_forwarder_invoked_inline(self, monkeypatch, tmp_path):
+        def fake_sniff(**kwargs):
+            kwargs["prn"](_query("192.168.1.10", "x7q9zk3m1p8wr2nb.evil.com", t=1000.0))
+            kwargs["prn"](_query("192.168.1.10", "google.com", t=1001.0))
+
+        monkeypatch.setattr(capture_module, "sniff", fake_sniff)
+
+        sent = []
+        forwarder = SyslogCefForwarder(
+            SyslogSettings(enabled=True, host="siem.internal", min_severity="info"),
+            sender=sent.append,
+        )
+
+        capture_and_detect_live(
+            duration=5, iface=None,
+            pcap_file=str(tmp_path / "capture.pcap"),
+            json_file=str(tmp_path / "out.json"), report_file=str(tmp_path / "out.pdf"),
+            settings=DetectionSettings(entropy_threshold=3.5),
+            syslog_forwarder=forwarder,
+        )
+
+        assert len(sent) == 2
+        assert all(message.startswith("CEF:0|") for message in sent)

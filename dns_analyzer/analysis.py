@@ -1,4 +1,4 @@
-"""Top-level analysis pipeline: pcap in, JSON + PDF report out."""
+"""Top-level analysis pipeline: pcap in, JSON + PDF (+ CSV/STIX/syslog) out."""
 
 import json
 import logging
@@ -9,7 +9,9 @@ from scapy.all import DNS, UDP, rdpcap
 
 from dns_analyzer.alerting import WebhookAlerter, classify_severity
 from dns_analyzer.detection import DetectionSettings, apply_detection_signals, build_dns_record
+from dns_analyzer.export import generate_csv_report, write_stix_bundle
 from dns_analyzer.report import generate_pdf_report
+from dns_analyzer.syslog_forwarder import SyslogCefForwarder
 from dns_analyzer.threat_intel import ThreatIntelChecker, apply_threat_intel
 
 logger = logging.getLogger(__name__)
@@ -22,8 +24,12 @@ def analyze_pcap(
     settings: Optional[DetectionSettings] = None,
     threat_intel_checker: Optional[ThreatIntelChecker] = None,
     alerter: Optional[WebhookAlerter] = None,
+    csv_file: Optional[str] = None,
+    stix_file: Optional[str] = None,
+    syslog_forwarder: Optional[SyslogCefForwarder] = None,
 ) -> List[Dict[str, Any]]:
-    """Analyze the captured DNS packets and save details to JSON and a PDF report.
+    """Analyze the captured DNS packets and save details to JSON, a PDF
+    report, and (if requested) CSV/STIX/syslog exports.
 
     Runs a pipeline over the packets in pcap_file:
       1. build_dns_record() per packet - pure, per-packet parsing.
@@ -32,10 +38,12 @@ def analyze_pcap(
       3. apply_threat_intel() (only if threat_intel_checker is given) -
          checks each record's registrable domain against threat-intel
          feeds; opt-in, since it sends observed domains to third parties.
-      4. Severity classification + optional webhook alerting (only if
-         alerter is given) - fires once analysis completes. For alerts
+      4. Severity classification + optional webhook alerting/syslog
+         forwarding - fires once analysis completes. For alerts/forwards
          that go out the moment an anomaly is observed, use live capture
          (dns_analyzer.live) instead.
+      5. CSV export (if csv_file given) and a STIX 2.1 indicator bundle
+         (if stix_file given), alongside the JSON/PDF output.
     """
     settings = settings or DetectionSettings()
 
@@ -78,7 +86,19 @@ def analyze_pcap(
             if severity:
                 logger.warning("[%s] %s -> %s", severity.upper(), record["query"], record["remark"])
 
+    if syslog_forwarder is not None:
+        for record in records:
+            syslog_forwarder.maybe_forward(record)
+
     generate_pdf_report(records, report_file)
+
+    if csv_file:
+        generate_csv_report(records, csv_file)
+        logger.info("CSV export saved to %s", csv_file)
+
+    if stix_file:
+        write_stix_bundle(records, stix_file)
+        logger.info("STIX bundle saved to %s", stix_file)
 
     with open(json_file, "w") as f:
         json.dump(records, f, indent=4)

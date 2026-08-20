@@ -77,13 +77,15 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 
 ---
 
-## Phase 5 — Interoperability
+## Phase 5 — Interoperability ✅ *done*
 
 **Why:** signals "plays well with a real SOC" rather than being a standalone script.
 
-- [ ] CSV export alongside JSON/PDF
-- [ ] Syslog/CEF output for SIEM forwarding (Splunk/ELK/Graylog)
-- [ ] (Stretch) STIX/TAXII-formatted IOC export
+- [x] CSV export alongside JSON/PDF — new `export.py`: `generate_csv_report()`/`flatten_record()`; `--csv-file` (default `output.csv`), written automatically (no opt-in flag - it's a local file with no privacy implications)
+- [x] Syslog/CEF output for SIEM forwarding (Splunk/ELK/Graylog) — new `syslog_forwarder.py`: `format_cef()`, `SyslogCefForwarder`; `--enable-syslog`, `--syslog-host`/`--syslog-port`/`--syslog-protocol`/`--syslog-min-severity`; works in both batch and live mode (live: fires inline per record, mirroring `WebhookAlerter`)
+- [x] (Stretch) STIX/TAXII-formatted IOC export — **STIX 2.1 done** (`export.build_stix_bundle()`/`write_stix_bundle()`, `--export-stix`, `--stix-file`); **TAXII not attempted** - needs a real TAXII server + client library to integrate against, out of scope for a stretch item within a stretch phase; the STIX bundle file can still be manually uploaded to a TAXII server
+
+*Landed 2026-08-20. New CLI flags: `--csv-file` (default `output.csv`, always written), `--enable-syslog`, `--syslog-host`, `--syslog-port` (default 514), `--syslog-protocol` (udp/tcp, default udp), `--syslog-min-severity` (default `info` - unlike `--alert-min-severity`'s `high` default, since SIEM forwarding is meant to be full-fidelity), `--export-stix`, `--stix-file` (default `output.stix.json`). Added `dns_analyzer/_version.py` (a leaf module, no imports) as the single source of truth for `__version__`, used in the CEF header's Device Version field. `analyze_pcap()`/`capture_and_detect_live()` both gained `csv_file`/`stix_file`/`syslog_forwarder` parameters. `cli.main()` now closes the syslog forwarder's socket in a `finally` block. Test suite grew from 153 to 190 cases, adding `tests/test_export.py` and `tests/test_syslog_forwarder.py`. Verified end-to-end against a real local UDP syslog socket (not just injected test fakes) - confirmed correct CEF formatting and escaping arriving over an actual network socket - plus real CSV/STIX file output. See DOCUMENTATION.md §1.3g/§1.3h for the full design writeup and §1.4 for new known limitations (UDP has no delivery guarantee, CEF Name field truncated at 200 chars, STIX bundle omits several fields a fully spec-compliant producer would include).*
 
 ---
 
@@ -131,3 +133,4 @@ Leaning toward **DNSpector** or **Sentry53** if/when this happens, since the roa
 - *"Built a live/streaming detection mode using Welford's online algorithm and a sliding-window burst tracker to run the same statistical anomaly detection inline during capture instead of only after it completes, plus opt-in Slack-/Discord-compatible webhook alerting with severity classification."* — Phase 4 ✅
 - *"Designed the live and batch detection pipelines to share their core per-record logic while only the statistical-aggregation strategy differs between them, and explicitly documented the resulting numerical difference (online vs. full-batch baselining) as a deliberate tradeoff."* — Phase 4 ✅
 - *"Added CI (GitHub Actions) with a 150+-case pytest suite covering entropy scoring, DNS flag parsing, statistical detection (batch and streaming), threat-intel/alerting provider logic (via dependency-injected fake fetchers/senders), packet capture (via a monkeypatched scapy sniff()), and end-to-end synthetic-pcap tests for both pipelines."* — Phase 1 ✅ (test suite grown through every phase; CI wiring is Phase 1)
+- *"Built CEF-formatted syslog forwarding for SIEM ingestion (Splunk/QRadar/ArcSight) and STIX 2.1 indicator export for threat-intel sharing, verified against a real UDP syslog listener socket end-to-end before landing, not just injected test fakes."* — Phase 5 ✅

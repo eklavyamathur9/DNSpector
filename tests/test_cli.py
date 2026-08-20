@@ -4,6 +4,7 @@ from dns_analyzer.cli import (
     alert_settings_from_args,
     parse_args,
     settings_from_args,
+    syslog_settings_from_args,
     threat_intel_settings_from_args,
 )
 
@@ -105,6 +106,39 @@ class TestParseArgs:
         args = parse_args(["--alert-min-severity", "critical"])
         assert args.alert_min_severity == "critical"
 
+    def test_syslog_disabled_by_default(self):
+        args = parse_args([])
+        assert args.enable_syslog is False
+        assert args.syslog_host is None
+        assert args.syslog_port == 514
+        assert args.syslog_protocol == "udp"
+        assert args.syslog_min_severity == "info"
+
+    def test_syslog_enabled_via_flags(self):
+        args = parse_args([
+            "--enable-syslog", "--syslog-host", "siem.internal",
+            "--syslog-port", "6514", "--syslog-protocol", "tcp",
+            "--syslog-min-severity", "high",
+        ])
+        assert args.enable_syslog is True
+        assert args.syslog_host == "siem.internal"
+        assert args.syslog_port == 6514
+        assert args.syslog_protocol == "tcp"
+        assert args.syslog_min_severity == "high"
+
+    def test_stix_export_disabled_by_default(self):
+        args = parse_args([])
+        assert args.export_stix is False
+        assert args.stix_file == "output.stix.json"
+
+    def test_stix_export_enabled_via_flag(self):
+        args = parse_args(["--export-stix", "--stix-file", "custom.stix.json"])
+        assert args.export_stix is True
+        assert args.stix_file == "custom.stix.json"
+
+    def test_csv_file_has_default(self):
+        assert parse_args([]).csv_file == "output.csv"
+
 
 class TestSettingsFromArgs:
     def test_builds_detection_settings_from_parsed_args(self):
@@ -143,4 +177,17 @@ class TestAlertSettingsFromArgs:
     def test_disabled_when_flag_not_passed(self, monkeypatch):
         monkeypatch.delenv("DNS_ANALYZER_WEBHOOK_URL", raising=False)
         settings = alert_settings_from_args(parse_args([]))
+        assert settings.enabled is False
+
+
+class TestSyslogSettingsFromArgs:
+    def test_builds_syslog_settings_from_parsed_args(self):
+        args = parse_args(["--enable-syslog", "--syslog-host", "siem.internal", "--syslog-port", "6514"])
+        settings = syslog_settings_from_args(args)
+        assert settings.enabled is True
+        assert settings.host == "siem.internal"
+        assert settings.port == 6514
+
+    def test_disabled_when_flag_not_passed(self):
+        settings = syslog_settings_from_args(parse_args([]))
         assert settings.enabled is False
