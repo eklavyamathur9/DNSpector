@@ -27,7 +27,7 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 - [x] Add type hints throughout
 - [x] Add error handling for realistic failure modes: capture `PermissionError`/`OSError` (elevated-privilege guidance logged, clean exit code), no packets captured (skips analysis with a warning instead of crashing), missing/corrupt pcap file (`FileNotFoundError`/`ValueError` with a clean message), packets missing an IP layer (skipped via `build_dns_record()` returning `None`, logged as a count instead of crashing)
 - [x] Add GitHub Actions CI (`.github/workflows/ci.yml`): `ruff check` + `pytest` on every push/PR to `main`, plus a CI badge in the README
-- [ ] Split into modules (`capture.py`, `analysis.py`, `report.py`, `cli.py`) — **deferred**: `Dns_Analyser.py` is ~300 lines with clearly separated functions after this phase, not yet unwieldy. Revisit once Phase 2/3 (baselining, frequency analysis, threat-intel) add substantially more code.
+- [x] Split into modules (`capture.py`, `analysis.py`, `report.py`, `cli.py`) — **deferred** here as planned; landed in Phase 3 once threat-intel code made the single file (~630 lines) genuinely unwieldy.
 
 *Landed 2026-08-20. Test suite grew from 19 to 31 cases (`build_dns_record`, `load_config`, `parse_args`). `generate_remark()` gained an `entropy_threshold` parameter (defaults to 3.5, same as before) so Phase 2's baselining can pass a computed value instead of a hardcoded one.*
 
@@ -47,14 +47,21 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 
 ---
 
-## Phase 3 — Threat Intelligence Integration
+## Phase 3 — Threat Intelligence Integration ✅ *done*
 
 **Why:** turns "looks suspicious" into "confirmed malicious" — the credibility jump that makes this tool usable in a real workflow instead of just a heuristic demo.
 
-- [ ] URLhaus feed lookup for resolved domains/IPs
-- [ ] OpenPhish feed lookup
-- [ ] Optional VirusTotal API integration (rate-limited free tier)
-- [ ] Local IOC cache (avoid re-querying feeds for the same domain within a TTL window)
+- [x] URLhaus feed lookup for resolved domains/IPs — `_fetch_urlhaus()`/`ThreatIntelChecker._check_urlhaus()`; requires a free `Auth-Key` (discovered via live testing — see below), skipped cleanly if not configured (`--urlhaus-api-key`)
+- [x] OpenPhish feed lookup — `OpenPhishFeed`, free/keyless, refreshed hourly, verified against the live feed
+- [x] Optional VirusTotal API integration (rate-limited free tier) — `_fetch_virustotal()`; `--virustotal-api-key`; client-side rate limiting (`virustotal_min_interval_seconds`, `virustotal_max_lookups_per_run`) that **skips** rather than blocks/sleeps once the limit is hit
+- [x] Local IOC cache (avoid re-querying feeds for the same domain within a TTL window) — `IOCCache`, `--threat-intel-cache-ttl-seconds`; caches both malicious *and* clean verdicts (most domains are clean, so caching only positives would miss most of the benefit)
+- [x] (Not originally scoped, done anyway) Module split into the `dns_analyzer/` package — see Phase 1's now-checked-off item above
+
+*Landed 2026-08-20. New CLI flags: `--enable-threat-intel` (off by default — see privacy/opsec note below), `--urlhaus-api-key`/`URLHAUS_API_KEY`, `--virustotal-api-key`/`VIRUSTOTAL_API_KEY`, `--threat-intel-cache-ttl-seconds`. Records gained a `threat_intel` JSON field (verdict dict or `null`).*
+
+*Real integration finding: while testing the live URLhaus API, discovered abuse.ch now requires an `Auth-Key` header on every request (401 with none, 403 `unknown_auth_key` with an invalid one) — older documentation describes it as keyless. `ThreatIntelChecker` checks for a configured key before attempting a URLhaus call at all, rather than shipping an integration that would silently fail on every request. Verified end-to-end against live OpenPhish/URLhaus APIs (not just injected test fakes) before landing. See DOCUMENTATION.md §1.3d for the full design writeup.*
+
+*Also landed in this phase (not originally scoped, but the natural trigger point): split the ~630-line single file into the `dns_analyzer/` package (8 modules), deferred from Phase 1 as planned there. `Dns_Analyser.py` is now a thin backward-compatible shim; `python -m dns_analyzer` also works. Test suite reorganized to mirror the package (`tests/test_dns_parsing.py`, `test_detection.py`, `test_threat_intel.py`, `test_config.py`, `test_cli.py`, `test_analysis.py`) and grew from 64 to 95 cases, including a real synthetic-pcap end-to-end test in `test_analysis.py` (closing the "still open" test-coverage gap noted in Phase 1/2).*
 
 ---
 
@@ -117,5 +124,6 @@ Leaning toward **DNSpector** or **Sentry53** if/when this happens, since the roa
 - *"Built a Python-based DNS traffic analyzer implementing Shannon-entropy and behavioral-frequency heuristics to detect DGA malware and DNS-tunneling exfiltration, with automated JSON/PDF/SIEM-ready reporting."*
 - *"Reduced false-positive rate on domain-anomaly detection by replacing a fixed entropy threshold with per-host statistical baselining (z-score deviation), and integrated public-suffix-aware domain parsing so entropy is scored on the registrant-controlled label instead of the full FQDN."* — Phase 2 ✅
 - *"Implemented a DNS-tunneling detector based on unique-subdomain-burst frequency per parent domain — a signal independent of any single query's entropy — plus per-client NXDOMAIN-ratio tracking for DGA-infected-host detection."* — Phase 2 ✅
-- *"Integrated threat-intelligence feed lookups (URLhaus) to convert heuristic alerts into confirmed IOC matches."* — Phase 3
-- *"Added CI (GitHub Actions) with a pytest suite covering entropy scoring, DNS flag parsing, and remark generation."* — Phase 1 ✅ (test suite already done in Phase 0; CI wiring is Phase 1)
+- *"Integrated OpenPhish/URLhaus/VirusTotal threat-intelligence feed lookups (with TTL caching and client-side rate limiting for VirusTotal's free tier) to convert heuristic alerts into confirmed IOC matches - opt-in, to keep an explicit boundary around what leaves the network."* — Phase 3 ✅
+- *"Refactored a 630-line single-file script into an 8-module package once feature growth made the single file unwieldy, keeping a backward-compatible CLI entry point throughout."* — Phase 3 ✅
+- *"Added CI (GitHub Actions) with a 95-case pytest suite covering entropy scoring, DNS flag parsing, statistical detection, threat-intel provider logic (via dependency-injected fake fetchers), and a synthetic-pcap end-to-end test."* — Phase 1 ✅ (test suite grown through Phase 0/2/3; CI wiring is Phase 1)
