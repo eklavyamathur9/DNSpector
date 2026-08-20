@@ -5,4 +5,4 @@ __version__ - e.g. for a CEF Device Version field - without risking a
 circular import through dns_analyzer/__init__.py.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

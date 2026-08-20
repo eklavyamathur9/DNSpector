@@ -6,6 +6,31 @@ The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze
 
 ---
 
+## Demo
+
+A snippet of `--live --enable-alerts` catching a synthetic DNS-tunneling burst as it happens (real log output from a synthetic capture - each `[HIGH]` line fires the moment that packet crosses the detection threshold, not after the run ends):
+
+```
+2026-08-20 23:22:46 [INFO] DNS Analyzer - developed by CipherxHub
+2026-08-20 23:22:46 [INFO] Threat-intel checks enabled (OpenPhish).
+2026-08-20 23:22:46 [INFO] Webhook alerting enabled (min severity: high).
+2026-08-20 23:22:46 [INFO] Capturing DNS traffic for 30 seconds on interface eth0...
+2026-08-20 23:22:46 [WARNING] [HIGH] lfxctncsbpcdp3.tunnel.evil-corp.com. -> High entropy domain name - Possible DGA or DNS Tunneling
+2026-08-20 23:22:46 [WARNING] [HIGH] eiw8uo9b4kfel3.tunnel.evil-corp.com. -> High entropy domain name - Possible DGA or DNS Tunneling
+                                       ... (13 more, same pattern) ...
+2026-08-20 23:22:46 [WARNING] [HIGH] 4rx2dx621rg2l2.tunnel.evil-corp.com. -> High entropy domain name - Possible DGA or DNS Tunneling | 15 unique subdomains under evil-corp.com within 60s - possible DNS tunneling
+2026-08-20 23:22:46 [WARNING] [HIGH] 8oo80gef63f39x.tunnel.evil-corp.com. -> High entropy domain name - Possible DGA or DNS Tunneling | 16 unique subdomains under evil-corp.com within 60s - possible DNS tunneling
+2026-08-20 23:22:46 [INFO] Captured 18 DNS packet(s), saved to dns_capture.pcap
+2026-08-20 23:22:46 [INFO] Analysis results saved to output.json
+2026-08-20 23:22:46 [INFO] Report saved to dns_report.pdf
+```
+
+And the corresponding page from the generated PDF report - each entry shows the entropy, per-host z-score, and every detection signal that fired, with anomalies called out in red:
+
+![Sample DNS Traffic Analysis Report page, showing flagged DNS-tunneling queries with entropy, z-score, and burst-detection annotations](docs/sample-report.png)
+
+---
+
 ## Features
 
 - **Packet Capture**: Captures DNS packets over UDP port 53 for a user-defined duration.
@@ -47,6 +72,8 @@ For the ordered, checklist-driven plan for evolving this project (engineering ha
      ```bash
      pip install -r requirements.txt
      ```
+
+Alternatively, install it as a package (`pip install -e .`, using `pyproject.toml`) to get a `dns-analyzer` console command on your `PATH` instead of invoking the script directly - useful if you want to run it from outside the repo. `sudo`, needed for raw capture either way, generally requires an absolute path or a shell that keeps its `PATH`; a venv's `dns-analyzer` under `sudo` may need `sudo $(which dns-analyzer)` or `sudo -E`.
 
 ---
 
@@ -220,6 +247,12 @@ Install dependencies using:
 ```bash
 pip install -r requirements.txt
 ```
+
+---
+
+## Contributing
+
+Contributions are welcome - see **[CONTRIBUTING.md](CONTRIBUTING.md)** for dev setup, testing/linting, code conventions, and a list of concrete good-first-contribution ideas. Please also review the **[Code of Conduct](CODE_OF_CONDUCT.md)**. Found a security issue? See **[SECURITY.md](SECURITY.md)** instead of opening a public issue. Release history lives in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ---
 

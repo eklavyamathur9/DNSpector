@@ -89,20 +89,22 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 
 ---
 
-## Phase 6 — Open Source Readiness *(deferred — build first, open later)*
+## Phase 6 — Open Source Readiness ✅ *mostly done*
 
-**Why:** deferred deliberately. Focus stays on Phases 1–3 landing first; this phase makes the repo genuinely contributor-ready once there's more substance to contribute to.
+**Why:** deferred deliberately until Phases 1–5 landed; this phase makes the repo genuinely contributor-ready now that there's real substance to contribute to.
 
-- [ ] `CONTRIBUTING.md` — dev setup, how to run tests, branch/PR conventions
-- [ ] `CODE_OF_CONDUCT.md` (Contributor Covenant template)
-- [ ] `SECURITY.md` — responsible-disclosure process (relevant: this tool needs elevated raw-capture privileges and touches potentially sensitive traffic)
-- [ ] GitHub issue templates (bug report, feature request) + PR template
+- [x] `CONTRIBUTING.md` — dev setup, testing/linting, code conventions, a "suggested first contributions" list pulled from the project's own documented gaps
+- [x] `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1)
+- [x] `SECURITY.md` — responsible-disclosure process, with an explicit threat-model section for this tool's specific attack surface (elevated capture privileges, untrusted-packet parsing, third-party data egress when threat-intel/alerting/syslog are enabled)
+- [x] GitHub issue templates (bug report, feature request, a `config.yml` linking to `SECURITY.md`) + PR template
 - [x] CI badge in the README *(landed early, as a natural side effect of Phase 1's CI setup)*
-- [ ] Demo GIF/screenshot of the PDF report and terminal run in the README (big discoverability lever)
-- [ ] Tag a few small, well-scoped Phase 5 items as "good first issue"
-- [ ] `CHANGELOG.md` + semantic versioning via git tags once phases start shipping
-- [ ] Package for PyPI (`pyproject.toml`) so it's `pip install`-able without cloning
-- [ ] Enable GitHub Discussions for design conversations separate from issues
+- [x] Demo GIF/screenshot of the PDF report and terminal run in the README — a real (synthetic-capture) screenshot of a flagged DNS-tunneling page plus curated real log output from a `--live --enable-alerts` run, both generated end-to-end through the actual pipeline, not mocked up
+- [x] Suggested "good first issue"-sized starting points — written into `CONTRIBUTING.md` for now (see below for why actual GitHub issue creation/labeling is a separate, pending decision)
+- [x] `CHANGELOG.md` — Keep a Changelog format, one entry per landed phase (0.1.0 → 0.6.0), reconstructed from the git history
+- [x] Package for PyPI (`pyproject.toml` build metadata) — verified end-to-end: built and installed into a throwaway venv, confirmed `dns_analyzer.__version__` resolves correctly (dynamically sourced from `_version.py`, not duplicated) and the `dns-analyzer` console-script entry point works. **Not yet actually published to PyPI** - that's a real, external, one-way action (claims the package name) deliberately left for the user to trigger, not something to do unprompted.
+- [ ] Enable GitHub Discussions for design conversations separate from issues — **not done**: this is a GitHub repo-settings change, not a file in this repo, and changes something externally visible on a real GitHub repo - left for the user to enable (Settings → General → Features → Discussions, or `gh repo edit --enable-discussions`) rather than done unprompted.
+
+*Landed 2026-08-20 (file-based portion). Also not done in this pass, by design: actually creating/labeling live GitHub issues for the "good first issue" suggestions - creating public issues on a real repo is a visible, external action distinct from a local file change, so the candidates are written into `CONTRIBUTING.md` for the user to turn into real issues (or ask for that separately) rather than done silently. Semantic-versioning git tags for 0.1.0–0.6.0 also not created - `CHANGELOG.md` records the versions, but backdating tags onto existing commits is a bit unusual and was left out; new tags can start from whatever version ships next.*
 
 ---
 
@@ -134,3 +136,4 @@ Leaning toward **DNSpector** or **Sentry53** if/when this happens, since the roa
 - *"Designed the live and batch detection pipelines to share their core per-record logic while only the statistical-aggregation strategy differs between them, and explicitly documented the resulting numerical difference (online vs. full-batch baselining) as a deliberate tradeoff."* — Phase 4 ✅
 - *"Added CI (GitHub Actions) with a 150+-case pytest suite covering entropy scoring, DNS flag parsing, statistical detection (batch and streaming), threat-intel/alerting provider logic (via dependency-injected fake fetchers/senders), packet capture (via a monkeypatched scapy sniff()), and end-to-end synthetic-pcap tests for both pipelines."* — Phase 1 ✅ (test suite grown through every phase; CI wiring is Phase 1)
 - *"Built CEF-formatted syslog forwarding for SIEM ingestion (Splunk/QRadar/ArcSight) and STIX 2.1 indicator export for threat-intel sharing, verified against a real UDP syslog listener socket end-to-end before landing, not just injected test fakes."* — Phase 5 ✅
+- *"Prepared the project for open-source contribution (CONTRIBUTING/CODE_OF_CONDUCT/SECURITY docs, issue/PR templates, a changelog, PyPI packaging metadata) and verified the packaging end-to-end by building and installing into a clean virtual environment rather than assuming the metadata was correct."* — Phase 6 ✅

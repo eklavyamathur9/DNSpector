@@ -1,3 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dns-analyzer"
+dynamic = ["version"]
+description = "Capture and analyze DNS traffic for anomalies such as DNS tunneling and DGA-generated domains."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+authors = [{ name = "CipherxHub" }]
+keywords = ["dns", "security", "network-security", "threat-intelligence", "dga", "dns-tunneling", "siem"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = [
+    "scapy",
+    "numpy",
+    "reportlab",
+    "tldextract",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/eklavyamathur9/Dns-Analyser"
+Documentation = "https://github.com/eklavyamathur9/Dns-Analyser/blob/main/DOCUMENTATION.md"
+Changelog = "https://github.com/eklavyamathur9/Dns-Analyser/blob/main/CHANGELOG.md"
+Issues = "https://github.com/eklavyamathur9/Dns-Analyser/issues"
+
+[project.scripts]
+dns-analyzer = "dns_analyzer.cli:main"
+
+[tool.setuptools]
+packages = ["dns_analyzer"]
+
+[tool.setuptools.dynamic]
+version = { attr = "dns_analyzer._version.__version__" }
+
 [tool.ruff]
 line-length = 120
 target-version = "py38"

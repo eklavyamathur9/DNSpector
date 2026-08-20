@@ -1,0 +1,74 @@
+# Contributing to DNS Analyzer
+
+Thanks for considering a contribution! This is a personal/portfolio project, but it's built to a "real project" standard - tested, linted, documented - and genuinely welcomes outside contributions.
+
+## Ways to contribute
+
+- **Bug reports** - see [Reporting bugs](#reporting-bugs) below. For security vulnerabilities, see [SECURITY.md](SECURITY.md) instead of opening a public issue.
+- **Feature requests / ideas** - especially anything from the "still open" items in [PHASES.md](PHASES.md) or [DOCUMENTATION.md](DOCUMENTATION.md)'s known-limitations sections (§1.4) - those are curated lists of genuine gaps, not just aspirational wishlists.
+- **Pull requests** - see [Dev setup](#dev-setup) and [Submitting a pull request](#submitting-a-pull-request) below.
+- **Documentation** - [DOCUMENTATION.md](DOCUMENTATION.md) is meant to explain *why*, not just *what*; if something reads as unclear or stale, that's worth a PR on its own.
+
+## Dev setup
+
+```bash
+git clone https://github.com/eklavyamathur9/Dns-Analyser.git
+cd Dns-Analyser
+python -m venv venv && source venv/bin/activate  # optional but recommended
+pip install -r requirements-dev.txt
+```
+
+Run the tool itself with `sudo python Dns_Analyser.py` (raw packet capture needs elevated privileges) - see [README.md](README.md) for the full CLI.
+
+## Running tests
+
+```bash
+pytest tests/ -v
+```
+
+The suite is organized to mirror the `dns_analyzer/` package (`tests/test_detection.py` tests `dns_analyzer/detection.py`, and so on). It runs with **zero real network access, root privileges, or webhook/syslog endpoints required** - every network-touching component (`threat_intel.py`, `alerting.py`, `syslog_forwarder.py`) takes an injectable function for the actual send/fetch, and tests supply a fake one. `tests/test_capture.py`/`tests/test_live.py` similarly monkeypatch `scapy.sniff()` rather than doing a real capture. If you add code that touches the network or capture, follow this pattern rather than mocking at the `unittest.mock` level or skipping the test in CI.
+
+CI runs the same suite plus lint on every push/PR - see `.github/workflows/ci.yml`.
+
+## Linting
+
+```bash
+ruff check .
+```
+
+Config lives in `pyproject.toml`. Fix what `ruff` flags before opening a PR; CI will fail otherwise.
+
+## Code style / conventions
+
+Skim [DOCUMENTATION.md](DOCUMENTATION.md) section 1 first - it's a full module-by-module walkthrough of *why* things are structured the way they are, which is more useful than a style guide for getting a PR to fit naturally. A few patterns worth knowing before you start:
+
+- **Type hints throughout.** New functions should have them.
+- **Dependency injection for anything network-touching**, so it stays testable without a real network (see `threat_intel.py`'s `urlhaus_fetcher`/`openphish_feed`/`virustotal_fetcher` params, or `alerting.py`'s `sender` param, for the established pattern).
+- **Settings live in small `@dataclass`es** (`DetectionSettings`, `ThreatIntelSettings`, `AlertSettings`, `SyslogSettings`), not loose function parameters - keeps the pipeline functions' signatures from growing unboundedly as features are added.
+- **Comments explain *why*, not *what*.** A comment justifying a non-obvious choice (a workaround, a subtle invariant, a design tradeoff) is welcome; a comment restating what the next line of code obviously does is not.
+- **Batch and live pipelines share their per-record logic** (`build_dns_record`, `annotate_threat_intel`, `classify_severity`) and only differ in how batch-level statistics are aggregated (full-batch recompute vs. incremental/streaming). If you're adding a new detection signal, consider from the start whether it needs both a batch and a streaming implementation - see `detection.py`'s `apply_detection_signals()` vs. `LiveDetectionEngine` for the existing pattern.
+- **Self-critique known limitations honestly.** If you land a feature with a real limitation (like the live/batch z-score numerical difference documented in DOCUMENTATION.md §1.4), write it down explicitly rather than leaving it as a silent surprise for the next person.
+
+## Submitting a pull request
+
+- Keep PRs focused - one logical change per PR is much easier to review than a bundle of unrelated fixes.
+- Make sure `pytest tests/ -v` and `ruff check .` are both clean.
+- If you're closing an item from [PHASES.md](PHASES.md), check it off and add a short note in that phase's landing summary (see existing phases for the format) - but feel free to open a PR without touching PHASES.md at all for anything not on the roadmap.
+- If your change affects documented behavior, update [DOCUMENTATION.md](DOCUMENTATION.md) and/or [README.md](README.md) in the same PR - stale docs are worse than no docs.
+- Describe *why* the change is needed, not just what it does - the commit history in this repo leans toward explaining reasoning (see `git log` for examples), and PR descriptions should too.
+
+## Suggested first contributions
+
+A few concrete, well-scoped starting points pulled from the project's own documented gaps (see [DOCUMENTATION.md](DOCUMENTATION.md) §1.4 and §3, and [PHASES.md](PHASES.md) for the full context on each):
+
+- **Wire up `mypy`** in CI alongside `ruff` (Phase 1's still-open item).
+- **Backport the sliding-window burst detector** from `LiveDetectionEngine.SubdomainBurstTracker` to batch mode's `detect_subdomain_bursts()`, fixing the hard-time-bucket-boundary limitation documented for batch mode.
+- **Alert/forward de-duplication** - a cooldown per `(host, alert-type)` so a persistent incident doesn't fire one webhook/syslog message per qualifying record (documented limitation in DOCUMENTATION.md §1.4).
+- **Typosquatting detection** - Levenshtein/edit-distance check against a small list of high-value brand domains (§3.1 in DOCUMENTATION.md).
+- **A live dashboard** (Streamlit or Flask) consuming `--live` mode's output - the data and even console alert lines already exist; there's just no visual front-end yet.
+
+None of these require deep familiarity with the whole codebase to start - each touches one or two files with existing test patterns to follow.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the project's [MIT License](LICENSE).

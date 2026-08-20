@@ -6,6 +6,10 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
+# Packaging build artifacts
+build/
+dist/
+
 # Virtual environments
 venv/
 .venv/
@@ -14,3 +18,5 @@ venv/
 dns_capture.pcap
 output.json
 dns_report.pdf
+output.csv
+output.stix.json
