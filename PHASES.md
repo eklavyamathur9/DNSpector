@@ -89,22 +89,22 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 
 ---
 
-## Phase 6 — Open Source Readiness ✅ *mostly done*
+## Phase 6 — Open Source Readiness ✅ *done*
 
 **Why:** deferred deliberately until Phases 1–5 landed; this phase makes the repo genuinely contributor-ready now that there's real substance to contribute to.
 
-- [x] `CONTRIBUTING.md` — dev setup, testing/linting, code conventions, a "suggested first contributions" list pulled from the project's own documented gaps
+- [x] `CONTRIBUTING.md` — dev setup, testing/linting, code conventions, a "suggested first contributions" list pulled from the project's own documented gaps (now linking to real filed issues - see below), plus a "Publishing a release" walkthrough for the PyPI trusted-publisher one-time setup
 - [x] `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1)
 - [x] `SECURITY.md` — responsible-disclosure process, with an explicit threat-model section for this tool's specific attack surface (elevated capture privileges, untrusted-packet parsing, third-party data egress when threat-intel/alerting/syslog are enabled)
 - [x] GitHub issue templates (bug report, feature request, a `config.yml` linking to `SECURITY.md`) + PR template
 - [x] CI badge in the README *(landed early, as a natural side effect of Phase 1's CI setup)*
 - [x] Demo GIF/screenshot of the PDF report and terminal run in the README — a real (synthetic-capture) screenshot of a flagged DNS-tunneling page plus curated real log output from a `--live --enable-alerts` run, both generated end-to-end through the actual pipeline, not mocked up
-- [x] Suggested "good first issue"-sized starting points — written into `CONTRIBUTING.md` for now (see below for why actual GitHub issue creation/labeling is a separate, pending decision)
+- [x] Tag a few small, well-scoped items as "good first issue" — **5 real issues filed** on GitHub (required enabling Issues on the repo first, which had been off): [#1 mypy in CI](https://github.com/eklavyamathur9/Dns-Analyser/issues/1), [#2 sliding-window burst backport](https://github.com/eklavyamathur9/Dns-Analyser/issues/2), [#3 alert de-duplication](https://github.com/eklavyamathur9/Dns-Analyser/issues/3), [#4 typosquatting detection](https://github.com/eklavyamathur9/Dns-Analyser/issues/4), [#5 live dashboard](https://github.com/eklavyamathur9/Dns-Analyser/issues/5)
 - [x] `CHANGELOG.md` — Keep a Changelog format, one entry per landed phase (0.1.0 → 0.6.0), reconstructed from the git history
-- [x] Package for PyPI (`pyproject.toml` build metadata) — verified end-to-end: built and installed into a throwaway venv, confirmed `dns_analyzer.__version__` resolves correctly (dynamically sourced from `_version.py`, not duplicated) and the `dns-analyzer` console-script entry point works. **Not yet actually published to PyPI** - that's a real, external, one-way action (claims the package name) deliberately left for the user to trigger, not something to do unprompted.
-- [ ] Enable GitHub Discussions for design conversations separate from issues — **not done**: this is a GitHub repo-settings change, not a file in this repo, and changes something externally visible on a real GitHub repo - left for the user to enable (Settings → General → Features → Discussions, or `gh repo edit --enable-discussions`) rather than done unprompted.
+- [x] Package for PyPI (`pyproject.toml` build metadata) — verified end-to-end: built and installed into a throwaway venv, confirmed `dns_analyzer.__version__` resolves correctly (dynamically sourced from `_version.py`, not duplicated) and the `dns-analyzer` console-script entry point works. Also added `.github/workflows/publish.yml` (PyPI Trusted Publishing via OIDC, no stored secret) so a real release can ship with one click once set up. **Not yet actually published to PyPI** - claiming the package name is a real, external, one-way action requiring a one-time manual step on pypi.org only the account owner can do (documented in `CONTRIBUTING.md`), deliberately left for the user rather than attempted without their credentials.
+- [x] Enable GitHub Discussions for design conversations separate from issues — enabled via `gh repo edit --enable-discussions`.
 
-*Landed 2026-08-20 (file-based portion). Also not done in this pass, by design: actually creating/labeling live GitHub issues for the "good first issue" suggestions - creating public issues on a real repo is a visible, external action distinct from a local file change, so the candidates are written into `CONTRIBUTING.md` for the user to turn into real issues (or ask for that separately) rather than done silently. Semantic-versioning git tags for 0.1.0–0.6.0 also not created - `CHANGELOG.md` records the versions, but backdating tags onto existing commits is a bit unusual and was left out; new tags can start from whatever version ships next.*
+*Landed 2026-08-20. Confirmed `dns-analyzer`/`dns-analyser` are both unclaimed on PyPI (checked via the PyPI JSON API) before setting up packaging, so the name is safe to reserve whenever publishing happens. Creating the 5 "good first issue" tickets required first discovering (and enabling) that the repository had Issues disabled entirely - not just missing content. Semantic-versioning git tags for 0.1.0–0.6.0 were not created - `CHANGELOG.md` records the versions, but backdating tags onto existing commits is a bit unusual and was left out; new tags can start from whatever version ships next (see `CONTRIBUTING.md`'s release walkthrough).*
 
 ---
 

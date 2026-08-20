@@ -59,15 +59,34 @@ Skim [DOCUMENTATION.md](DOCUMENTATION.md) section 1 first - it's a full module-b
 
 ## Suggested first contributions
 
-A few concrete, well-scoped starting points pulled from the project's own documented gaps (see [DOCUMENTATION.md](DOCUMENTATION.md) §1.4 and §3, and [PHASES.md](PHASES.md) for the full context on each):
+Filed as real issues, labeled `good first issue`, pulled from the project's own documented gaps (see [DOCUMENTATION.md](DOCUMENTATION.md) §1.4 and §3, and [PHASES.md](PHASES.md) for full context on each):
 
-- **Wire up `mypy`** in CI alongside `ruff` (Phase 1's still-open item).
-- **Backport the sliding-window burst detector** from `LiveDetectionEngine.SubdomainBurstTracker` to batch mode's `detect_subdomain_bursts()`, fixing the hard-time-bucket-boundary limitation documented for batch mode.
-- **Alert/forward de-duplication** - a cooldown per `(host, alert-type)` so a persistent incident doesn't fire one webhook/syslog message per qualifying record (documented limitation in DOCUMENTATION.md §1.4).
-- **Typosquatting detection** - Levenshtein/edit-distance check against a small list of high-value brand domains (§3.1 in DOCUMENTATION.md).
-- **A live dashboard** (Streamlit or Flask) consuming `--live` mode's output - the data and even console alert lines already exist; there's just no visual front-end yet.
+- [#1 - Wire up `mypy` in CI alongside `ruff`](https://github.com/eklavyamathur9/Dns-Analyser/issues/1)
+- [#2 - Backport the sliding-window burst tracker to batch mode](https://github.com/eklavyamathur9/Dns-Analyser/issues/2)
+- [#3 - Alert/syslog-forward de-duplication (cooldown per host+alert-type)](https://github.com/eklavyamathur9/Dns-Analyser/issues/3)
+- [#4 - Typosquatting detection (Levenshtein distance against known-brand domains)](https://github.com/eklavyamathur9/Dns-Analyser/issues/4)
+- [#5 - Live dashboard (Streamlit or Flask) for `--live` mode](https://github.com/eklavyamathur9/Dns-Analyser/issues/5)
 
-None of these require deep familiarity with the whole codebase to start - each touches one or two files with existing test patterns to follow.
+None of these require deep familiarity with the whole codebase to start - each touches one or two files with existing test patterns to follow. See the [full issue list](https://github.com/eklavyamathur9/Dns-Analyser/issues) for anything newer, or [Discussions](https://github.com/eklavyamathur9/Dns-Analyser/discussions) to propose your own idea before writing code.
+
+## Publishing a release (maintainers)
+
+Releases publish to PyPI via `.github/workflows/publish.yml`, using PyPI's [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) - no API token is stored in this repo. **One-time setup**, done once by whoever owns the `dns-analyzer` name on PyPI:
+
+1. Create a PyPI account (or log in) at [pypi.org](https://pypi.org/), if you haven't already.
+2. Go to [pypi.org/manage/account/publishing/](https://pypi.org/manage/account/publishing/) and add a new pending trusted publisher for a *new* project:
+   - PyPI project name: `dns-analyzer`
+   - Owner: `eklavyamathur9`
+   - Repository name: `Dns-Analyser`
+   - Workflow name: `publish.yml`
+   - Environment name: `pypi`
+3. That's it - no secret to copy anywhere.
+
+**Every release after that**, just:
+
+1. Bump `__version__` in `dns_analyzer/_version.py` and add a `CHANGELOG.md` entry.
+2. Tag it (`git tag v0.7.0 && git push --tags`) and [publish a GitHub Release](https://github.com/eklavyamathur9/Dns-Analyser/releases/new) from that tag.
+3. The `publish.yml` workflow builds and publishes to PyPI automatically once the Release is published.
 
 ## License
 
