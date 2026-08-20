@@ -6,18 +6,20 @@ This document is a deep dive into **how the tool actually works**, **the DNS/sec
 
 ## 1. How the Project Works (Code Walkthrough)
 
-The whole tool lives in `Dns_Analyser.py` and runs in two sequential phases: **capture**, then **offline analysis**.
+The whole tool lives in `Dns_Analyser.py` and runs in two sequential phases: **capture**, then **offline analysis**, orchestrated by a `main()` entry point driven by an `argparse` CLI (optionally backed by a JSON config file — see §1.1a).
 
 ```mermaid
 flowchart LR
-    A[User enters duration] --> B["capture_dns_packets()\nscapy.sniff(filter='udp port 53')"]
-    B --> C[packet_handler filters\nDNS+UDP packets into memory]
+    A["CLI flags / config.json\nparse_args()"] --> M["main()"]
+    M --> B["capture_dns_packets()\nscapy.sniff(filter='udp port 53')"]
+    B --> C[packet_handler closure filters\nDNS+UDP packets into memory]
     C --> D["wrpcap()\ndns_capture.pcap"]
     D --> E["analyze_pcap()\nrdpcap() reloads the file"]
     E --> F[Per-packet loop]
-    F --> G["calculate_entropy(domain)"]
-    F --> H["parse_dns_flags(dns)"]
-    G --> I["generate_remark(entropy, flags)"]
+    F --> R["build_dns_record(packet)"]
+    R --> G["calculate_entropy(domain)"]
+    R --> H["parse_dns_flags(dns)"]
+    G --> I["generate_remark(entropy, flags, threshold)"]
     H --> I
     I --> J["output.json"]
     I --> K["dns_report.pdf via reportlab"]
@@ -25,22 +27,24 @@ flowchart LR
 
 ### 1.1 Capture phase
 
-- `capture_dns_packets(duration)` (`Dns_Analyser.py:57-63`) uses Scapy's `sniff()` with a **BPF filter** `udp port 53`, so the OS-level packet filter — not Python — discards all non-DNS traffic before it ever reaches the script. This requires raw-socket access (root/administrator privileges, or `CAP_NET_RAW` on Linux).
-- `packet_handler()` (`Dns_Analyser.py:53-55`) is the callback Scapy invokes per captured packet. It double-checks the packet actually has both a `DNS` and `UDP` layer (defensive, since some non-port-53 traffic can theoretically match) and appends it to the in-memory `packets` list.
-- After `timeout` seconds, `wrpcap()` writes everything to `dns_capture.pcap` — a **standard pcap file**, so it's also readable in Wireshark/tcpdump for manual inspection.
+- `capture_dns_packets(duration, iface, pcap_file)` (`Dns_Analyser.py`) uses Scapy's `sniff()` with a **BPF filter** `udp port 53`, so the OS-level packet filter — not Python — discards all non-DNS traffic before it ever reaches the script. This requires raw-socket access (root/administrator privileges, or `CAP_NET_RAW` on Linux); a `PermissionError`/`OSError` here is caught, logged with actionable guidance, and turned into a clean `exit(1)` instead of a raw traceback (see §1.3b).
+- The `packet_handler` callback Scapy invokes per captured packet is a **closure** local to `capture_dns_packets` (not a module-level global) — it double-checks the packet actually has both a `DNS` and `UDP` layer and appends it to a list scoped to that capture run. Keeping it a closure means running capture twice in the same process (e.g. in tests) can't leak state between runs.
+- After `timeout` seconds, if any packets were captured, `wrpcap()` writes them to `dns_capture.pcap` (or `--pcap-file`) — a **standard pcap file**, so it's also readable in Wireshark/tcpdump for manual inspection. If nothing was captured, a warning is logged and `main()` skips the analysis phase entirely rather than trying to analyze an empty/missing file.
+
+### 1.1a CLI, config file, and logging
+
+- `parse_args()` builds an `argparse` parser with `--duration`, `--iface`, `--output-dir`, `--entropy-threshold`, `--pcap-file`, `--json-file`, `--report-file`, and `--log-level`. Run `python Dns_Analyser.py --help` for the full list.
+- `--config <path>` points at a JSON file (see `config.example.json`) whose keys become the *defaults* for every other flag. Precedence is **CLI flag > config file > built-in default** — implemented via a two-pass parse: a lightweight `pre_parser` extracts just `--config` first (via `parse_known_args`), `load_config()` reads it, and those values seed the real parser's `default=` arguments before the full `argv` is parsed again.
+- All logging goes through Python's `logging` module (`logger = logging.getLogger("dns_analyzer")`), configured once in `main()` via `logging.basicConfig(level=..., format=...)` based on `--log-level`. This replaced the original `print()` calls, so output now carries timestamps/levels and can be filtered or redirected like any standard Python logging setup.
 
 ### 1.2 Analysis phase
 
-`analyze_pcap()` (`Dns_Analyser.py:65-129`) re-reads the pcap from disk (decoupling capture from analysis — you could swap in any pcap, not just one you just captured) and for every DNS packet:
+`analyze_pcap(pcap_file, json_file, report_file, entropy_threshold)` (`Dns_Analyser.py`) re-reads the pcap from disk (decoupling capture from analysis — you could swap in any pcap, not just one you just captured) and for every DNS+UDP packet:
 
-1. Extracts `source_ip` / `destination_ip` from the IP layer.
-2. Pulls the queried domain from the **DNS Question section** (`DNSQR.qname`).
-3. Runs it through `calculate_entropy()`.
-4. Decodes the DNS header flags via `parse_dns_flags()`.
-5. Feeds entropy + flags into `generate_remark()` to produce a human-readable verdict.
-6. Appends a structured record to `analysis_results` and simultaneously draws a block of text into a `reportlab` PDF canvas, paginating (`c.showPage()`) once `y_position` runs below `y=100`.
+1. Calls `build_dns_record(packet, entropy_threshold)` — a **pure function** that extracts `source_ip`/`destination_ip` from the IP layer, pulls the queried domain from the DNS Question section (`DNSQR.qname`), runs it through `calculate_entropy()`, decodes the header flags via `parse_dns_flags()`, and feeds both into `generate_remark()`. It returns `None` (and the packet is skipped, with a count logged afterward) if the packet has no IP layer — e.g. non-IPv4 traffic — rather than raising a `KeyError` (see §1.3b).
+2. Appends the resulting record to `analysis_results` and simultaneously draws a block of text into a `reportlab` PDF canvas, paginating (`c.showPage()`) once `y_position` runs below `y=100`.
 
-Finally, `analysis_results` is dumped to `output.json`, and the PDF canvas is saved.
+Finally, `analysis_results` is dumped to `output.json`, and the PDF canvas is saved. Separating `build_dns_record()` from the PDF-drawing loop also means the record-building logic is unit-testable without touching `reportlab` at all (see `tests/test_dns_analyser.py::TestBuildDnsRecord`).
 
 ### 1.3 The detection logic, function by function
 
@@ -69,15 +73,24 @@ The original implementation looked up `dns.opcode` and `dns.rcode` by indexing i
 
 This is the entire "intelligence" layer of the tool — everything else is capture plumbing and report formatting.
 
+#### 1.3b Fixed: crashes on realistic failure modes (Phase 1)
+
+The original script had no error handling at all — three genuinely likely failure modes each produced an unhandled exception and a raw traceback instead of a usable error message:
+
+- **No capture permissions.** `sniff()` needs raw-socket access; without it, `capture_dns_packets()` now catches `PermissionError`/`OSError`, logs guidance ("try running with sudo, or grant CAP_NET_RAW"), and `main()` exits with code `1` instead of a traceback.
+- **Missing/corrupt pcap file.** `analyze_pcap()` now explicitly checks the file exists (raising a clear `FileNotFoundError` if not) and wraps `rdpcap()` in a `try/except` that re-raises a `ValueError` with context if the file can't be parsed. `main()` catches both and logs+exits cleanly.
+- **Packet with no IP layer.** Previously `packet[IP].src` would raise `KeyError` on any non-IPv4 DNS traffic. `build_dns_record()` now checks `packet.haslayer(IP)` first and returns `None`, which `analyze_pcap()` counts and skips instead of crashing the whole run.
+
+Regression tests for these live in `tests/test_dns_analyser.py` (`TestBuildDnsRecord`, plus the `TestLoadConfig`/`TestParseArgs` classes for the related CLI/config plumbing).
+
 ### 1.4 Known limitations / rough edges (worth knowing before you demo this)
 
-- **Fixed entropy threshold (3.5) with no baseline.** Legitimate CDN/tracking subdomains (e.g. AWS S3 buckets, Akamai) often exceed 3.5 bits of entropy too, so this alone produces false positives. A real detector needs statistical baselining or a trained classifier (see §3).
-- **No TLD/public-suffix normalization before entropy calculation.** Entropy is computed over the full `qname` (including trailing dot and TLD), which dilutes the signal — the interesting randomness is usually in the subdomain/label a malware DGA or tunneling client controls, not in `.com.`.
-- **Two-phase, not streaming.** Detection only happens after the capture window ends; there's no live/real-time alerting.
-- **Single-machine, single-run.** No persistence across runs (each run overwrites `output.json`/`dns_capture.pcap`), no historical trend or per-host baseline.
-- **Interactive-only input.** `duration` is read via `input()`, so the tool can't be scripted, cron'd, or run headlessly without a TTY.
+- **Fixed entropy threshold (3.5) with no baseline.** Legitimate CDN/tracking subdomains (e.g. AWS S3 buckets, Akamai) often exceed 3.5 bits of entropy too, so this alone produces false positives. `--entropy-threshold` (Phase 1) lets you tune it per-run, but it's still a single global threshold, not an adaptive baseline — that's Phase 2.
+- **No TLD/public-suffix normalization before entropy calculation.** Entropy is computed over the full `qname` (including trailing dot and TLD), which dilutes the signal — the interesting randomness is usually in the subdomain/label a malware DGA or tunneling client controls, not in `.com.`. (Phase 2)
+- **Two-phase, not streaming.** Detection only happens after the capture window ends; there's no live/real-time alerting yet. (Phase 4)
+- **Single-machine, single-run.** No persistence across runs (each run overwrites `output.json`/`dns_capture.pcap` unless you pass different `--*-file` names), no historical trend or per-host baseline. (Phase 2/4)
 
-None of this makes the project bad — it's a solid protocol-analysis foundation — but naming these explicitly is exactly the kind of self-critique that makes a resume project credible in an interview ("I know the entropy threshold is naive; here's what I'd do instead...").
+None of this makes the project bad — it's a solid, now properly-scriptable protocol-analysis foundation — but naming these explicitly is exactly the kind of self-critique that makes a resume project credible in an interview ("I know the entropy threshold is naive; here's what I'd do instead...").
 
 ---
 
@@ -129,15 +142,15 @@ Grouped by theme, roughly in order of impact-per-effort. You don't need all of t
 
 ### 3.2 Engineering / software quality
 
-- **Replace `input()` with `argparse`** so the tool is scriptable: `python dns_analyzer.py --duration 60 --iface eth0 --output-dir ./reports`.
+- ~~**Replace `input()` with `argparse`**~~ **Done** (Phase 1, §1.1a) — `--duration`, `--iface`, `--output-dir`, `--entropy-threshold`, `--pcap-file`, `--json-file`, `--report-file`, `--log-level`.
 - ~~**Fix the opcode/rcode `IndexError` bug**~~ **Done** (§1.3a) — replaced list indexing with `.get()` on a dict, with an `"UNKNOWN(<value>)"` fallback.
-- **Structured logging** (`logging` module) instead of `print()`, with log levels and optional file output.
-- **Error handling** for the realistic failure modes: missing capture permissions, no packets captured, malformed/empty pcap, missing `DNSQR` layer.
-- ~~**Unit tests** (`pytest`) — `calculate_entropy` and `generate_remark` are pure functions and trivially testable.~~ **Done** — see `tests/test_dns_analyser.py` (19 cases covering entropy edge cases, flag parsing including the fixed opcode/rcode crash, and remark precedence). **Still open:** extend coverage to `capture_dns_packets`/`analyze_pcap` using a small **synthetic pcap fixture** (a checked-in `.pcap` with known packets) rather than requiring live network capture in CI.
-- **CI pipeline** (GitHub Actions): lint (`ruff`/`flake8`), type-check (`mypy`), run the test suite on every push. This is a small addition that signals real engineering discipline to anyone reviewing the repo.
-- **Type hints** throughout — cheap to add, makes the code self-documenting.
-- **Split into modules** (`capture.py`, `analysis.py`, `report.py`, `cli.py`) once the feature set grows — the single-file layout is fine at 135 lines but won't stay fine.
-- **Config file** (YAML/JSON) for thresholds, interface, output paths, and feed URLs instead of hardcoded constants.
+- ~~**Structured logging**~~ **Done** (Phase 1, §1.1a) — `logging` module with `--log-level`, replacing all `print()` calls.
+- ~~**Error handling**~~ **Done** (Phase 1, §1.3b) — capture permission errors, empty capture, missing/corrupt pcap, and packets without an IP layer all degrade gracefully instead of crashing.
+- ~~**Unit tests** (`pytest`)~~ **Done** — see `tests/test_dns_analyser.py` (31 cases: entropy, flag parsing, remark generation, `build_dns_record`, `load_config`, `parse_args`). **Still open:** extend coverage to `capture_dns_packets`/full `analyze_pcap` I/O using a small **synthetic pcap fixture** (a checked-in `.pcap` with known packets) rather than requiring live network capture in CI.
+- ~~**CI pipeline**~~ **Done** (Phase 1) — `.github/workflows/ci.yml` runs `ruff check` + `pytest` on every push/PR to `main`. **Still open:** type-checking (`mypy`) isn't wired in yet.
+- ~~**Type hints**~~ **Done** (Phase 1) — throughout `Dns_Analyser.py`.
+- **Split into modules** (`capture.py`, `analysis.py`, `report.py`, `cli.py`) — deliberately deferred; see `PHASES.md` Phase 1 for why (file isn't unwieldy yet at ~300 lines with clear function boundaries).
+- ~~**Config file**~~ **Done** (Phase 1, §1.1a) — JSON config via `--config`, `config.example.json`; CLI flags override it. (Feed-URL keys will be added when Phase 3 threat-intel integrations land.)
 
 ### 3.3 Live/streaming capability
 

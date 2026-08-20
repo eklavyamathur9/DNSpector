@@ -17,17 +17,19 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 
 ---
 
-## Phase 1 — Engineering Foundations
+## Phase 1 — Engineering Foundations ✅ *done*
 
 **Why:** the tool currently only runs interactively and prints to stdout, which blocks scripting, CI, and any kind of automation — this phase makes it a proper CLI tool without touching detection logic.
 
-- [ ] Replace `input()` with `argparse` (`--duration`, `--iface`, `--output-dir`, etc.)
-- [ ] Replace `print()` with the `logging` module (levels + optional file output)
-- [ ] Add a config file (YAML/JSON) for thresholds, interface, output paths, feed URLs
-- [ ] Add type hints throughout
-- [ ] Add error handling for realistic failure modes: missing capture permissions, no packets captured, malformed/empty pcap, missing `DNSQR` layer
-- [ ] Add GitHub Actions CI: lint (`ruff`) + `pytest` on every push
-- [ ] Split into modules (`capture.py`, `analysis.py`, `report.py`, `cli.py`) once the CLI/config work makes the single file unwieldy
+- [x] Replace `input()` with `argparse` (`--duration`, `--iface`, `--output-dir`, `--entropy-threshold`, `--pcap-file`, `--json-file`, `--report-file`, `--log-level`)
+- [x] Replace `print()` with the `logging` module (`logging.basicConfig`, level controlled by `--log-level`)
+- [x] Add a JSON config file (`--config`, see `config.example.json`) for thresholds, interface, output paths, filenames — CLI flags override config file values, which override built-in defaults
+- [x] Add type hints throughout
+- [x] Add error handling for realistic failure modes: capture `PermissionError`/`OSError` (elevated-privilege guidance logged, clean exit code), no packets captured (skips analysis with a warning instead of crashing), missing/corrupt pcap file (`FileNotFoundError`/`ValueError` with a clean message), packets missing an IP layer (skipped via `build_dns_record()` returning `None`, logged as a count instead of crashing)
+- [x] Add GitHub Actions CI (`.github/workflows/ci.yml`): `ruff check` + `pytest` on every push/PR to `main`, plus a CI badge in the README
+- [ ] Split into modules (`capture.py`, `analysis.py`, `report.py`, `cli.py`) — **deferred**: `Dns_Analyser.py` is ~300 lines with clearly separated functions after this phase, not yet unwieldy. Revisit once Phase 2/3 (baselining, frequency analysis, threat-intel) add substantially more code.
+
+*Landed 2026-08-20. Test suite grew from 19 to 31 cases (`build_dns_record`, `load_config`, `parse_args`). `generate_remark()` gained an `entropy_threshold` parameter (defaults to 3.5, same as before) so Phase 2's baselining can pass a computed value instead of a hardcoded one.*
 
 ---
 
@@ -82,8 +84,9 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 - [ ] `CODE_OF_CONDUCT.md` (Contributor Covenant template)
 - [ ] `SECURITY.md` — responsible-disclosure process (relevant: this tool needs elevated raw-capture privileges and touches potentially sensitive traffic)
 - [ ] GitHub issue templates (bug report, feature request) + PR template
-- [ ] CI badge + a demo GIF/screenshot of the PDF report and terminal run in the README (big discoverability lever)
-- [ ] Tag a few small, well-scoped Phase 1/5 items as "good first issue"
+- [x] CI badge in the README *(landed early, as a natural side effect of Phase 1's CI setup)*
+- [ ] Demo GIF/screenshot of the PDF report and terminal run in the README (big discoverability lever)
+- [ ] Tag a few small, well-scoped Phase 5 items as "good first issue"
 - [ ] `CHANGELOG.md` + semantic versioning via git tags once phases start shipping
 - [ ] Package for PyPI (`pyproject.toml`) so it's `pip install`-able without cloning
 - [ ] Enable GitHub Discussions for design conversations separate from issues

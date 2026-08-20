@@ -1,13 +1,18 @@
+import json
+
 import pytest
-from scapy.all import DNS
+from scapy.all import DNS, DNSQR, IP, UDP
 
 from Dns_Analyser import (
-    calculate_entropy,
-    parse_dns_flags,
-    format_flags,
-    generate_remark,
     OPCODES,
     RCODES,
+    build_dns_record,
+    calculate_entropy,
+    format_flags,
+    generate_remark,
+    load_config,
+    parse_args,
+    parse_dns_flags,
 )
 
 
@@ -114,3 +119,76 @@ class TestGenerateRemark:
         # entropy check happens first in generate_remark's branching order
         remark = generate_remark(4.0, self.REFUSED_FLAGS)
         assert "DGA" in remark or "Tunneling" in remark
+
+    def test_custom_entropy_threshold_changes_verdict(self):
+        # 3.6 would trip the default 3.5 threshold but not a raised one
+        remark = generate_remark(3.6, self.NORMAL_FLAGS, entropy_threshold=4.0)
+        assert remark == "Normal query"
+
+
+class TestBuildDnsRecord:
+    def test_builds_record_for_valid_dns_packet(self):
+        pkt = IP(src="10.0.0.1", dst="8.8.8.8") / UDP(sport=5000, dport=53) / DNS(qr=0, qd=DNSQR(qname="example.com"))
+        record = build_dns_record(pkt, entropy_threshold=3.5)
+        assert record is not None
+        assert record["source_ip"] == "10.0.0.1"
+        assert record["destination_ip"] == "8.8.8.8"
+        assert record["query"] == "example.com."
+        assert record["remark"] == "Normal query"
+
+    def test_packet_without_ip_layer_returns_none(self):
+        # e.g. non-IPv4 traffic - source/destination can't be determined
+        pkt = UDP(sport=5000, dport=53) / DNS(qr=0, qd=DNSQR(qname="example.com"))
+        assert build_dns_record(pkt, entropy_threshold=3.5) is None
+
+    def test_packet_without_dnsqr_uses_unknown_query(self):
+        # scapy's DNS() auto-populates a default question unless explicitly cleared
+        pkt = IP(src="10.0.0.1", dst="8.8.8.8") / UDP(sport=53, dport=5000) / DNS(qr=1, rcode=0, qd=[], qdcount=0)
+        record = build_dns_record(pkt, entropy_threshold=3.5)
+        assert record["query"] == "Unknown"
+
+
+class TestLoadConfig:
+    def test_no_path_returns_empty_dict(self):
+        assert load_config(None) == {}
+
+    def test_nonexistent_file_returns_empty_dict(self, tmp_path):
+        assert load_config(str(tmp_path / "missing.json")) == {}
+
+    def test_valid_config_is_loaded(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"duration": 30, "entropy_threshold": 4.0}))
+        assert load_config(str(config_file)) == {"duration": 30, "entropy_threshold": 4.0}
+
+    def test_malformed_config_raises_value_error(self, tmp_path):
+        config_file = tmp_path / "bad.json"
+        config_file.write_text("{not valid json")
+        with pytest.raises(ValueError):
+            load_config(str(config_file))
+
+
+class TestParseArgs:
+    def test_defaults(self):
+        args = parse_args([])
+        assert args.duration == 60
+        assert args.entropy_threshold == 3.5
+        assert args.pcap_file == "dns_capture.pcap"
+        assert args.log_level == "INFO"
+
+    def test_cli_flags_override_builtin_defaults(self):
+        args = parse_args(["--duration", "30", "--entropy-threshold", "4.0", "--iface", "eth0"])
+        assert args.duration == 30
+        assert args.entropy_threshold == 4.0
+        assert args.iface == "eth0"
+
+    def test_config_file_sets_defaults(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"duration": 45}))
+        args = parse_args(["--config", str(config_file)])
+        assert args.duration == 45
+
+    def test_cli_flag_overrides_config_file(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"duration": 45}))
+        args = parse_args(["--config", str(config_file), "--duration", "10"])
+        assert args.duration == 10

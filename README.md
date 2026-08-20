@@ -1,5 +1,7 @@
 # DNS Traffic Analyzer
 
+[![CI](https://github.com/eklavyamathur9/Dns-Analyser/actions/workflows/ci.yml/badge.svg)](https://github.com/eklavyamathur9/Dns-Analyser/actions/workflows/ci.yml)
+
 The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze, and report DNS traffic. It provides insights into DNS queries, flags, and entropy, helping identify potential anomalies such as DNS tunneling, misconfigurations, or malicious activities.
 
 ---
@@ -28,8 +30,8 @@ For the ordered, checklist-driven plan for evolving this project (engineering ha
 
 1. Clone the repository:
      ```bash
-     git clone [https://github.com/CipherxHub/Dns-Analyser]
-     cd Dns-Analyzer
+     git clone https://github.com/eklavyamathur9/Dns-Analyser.git
+     cd Dns-Analyser
      ```
 
 2. Install dependencies:
@@ -41,18 +43,31 @@ For the ordered, checklist-driven plan for evolving this project (engineering ha
 
 ## Usage
 
-1. Run the script:
-     ```bash
-     python Dns_Analyser.py
-     ```
+Run the script with the built-in default settings (60-second capture, current directory for output). Raw packet capture needs elevated privileges, so this typically requires `sudo`:
 
-2. Enter the duration (in seconds) for DNS packet capture when prompted.
+```bash
+sudo python Dns_Analyser.py
+```
 
-3. After capturing, the tool will:
-     - Save captured packets to `dns_capture.pcap`.
-     - Analyze the packets and save results to:
-         - `output.json` (JSON format)
-         - `dns_report.pdf` (PDF report)
+Or configure it via CLI flags:
+
+```bash
+sudo python Dns_Analyser.py --duration 30 --iface eth0 --entropy-threshold 4.0 --output-dir ./reports
+```
+
+Run `python Dns_Analyser.py --help` for the full list of options. Any of these can also be set as defaults in a JSON config file (see `config.example.json`) and passed with `--config`:
+
+```bash
+sudo python Dns_Analyser.py --config config.example.json
+```
+
+CLI flags always override the config file, which overrides the built-in defaults.
+
+After capturing, the tool will:
+ - Save captured packets to `dns_capture.pcap` (or `--pcap-file`).
+ - Analyze the packets and save results to:
+     - `output.json` (or `--json-file`)
+     - `dns_report.pdf` (or `--report-file`)
 
 ---
 

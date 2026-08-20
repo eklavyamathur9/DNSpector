@@ -1,0 +1,10 @@
+{
+  "duration": 60,
+  "iface": null,
+  "output_dir": ".",
+  "entropy_threshold": 3.5,
+  "pcap_file": "dns_capture.pcap",
+  "json_file": "output.json",
+  "report_file": "dns_report.pdf",
+  "log_level": "INFO"
+}
