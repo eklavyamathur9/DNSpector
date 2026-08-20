@@ -7,16 +7,16 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional
 
-from dns_analyzer.alerting import (
+from dnspector.alerting import (
     DEFAULT_ALERT_MIN_SEVERITY,
     SEVERITY_LEVELS,
     AlertSettings,
     WebhookAlerter,
 )
-from dns_analyzer.analysis import analyze_pcap
-from dns_analyzer.capture import capture_dns_packets
-from dns_analyzer.config import load_config
-from dns_analyzer.detection import (
+from dnspector.analysis import analyze_pcap
+from dnspector.capture import capture_dns_packets
+from dnspector.config import load_config
+from dnspector.detection import (
     DEFAULT_BURST_UNIQUE_SUBDOMAIN_THRESHOLD,
     DEFAULT_BURST_WINDOW_SECONDS,
     DEFAULT_ENTROPY_THRESHOLD,
@@ -26,14 +26,14 @@ from dns_analyzer.detection import (
     DEFAULT_Z_SCORE_THRESHOLD,
     DetectionSettings,
 )
-from dns_analyzer.live import capture_and_detect_live
-from dns_analyzer.syslog_forwarder import (
+from dnspector.live import capture_and_detect_live
+from dnspector.syslog_forwarder import (
     DEFAULT_SYSLOG_MIN_SEVERITY,
     DEFAULT_SYSLOG_PORT,
     SyslogCefForwarder,
     SyslogSettings,
 )
-from dns_analyzer.threat_intel import (
+from dnspector.threat_intel import (
     DEFAULT_CACHE_TTL_SECONDS,
     ThreatIntelChecker,
     ThreatIntelSettings,
@@ -181,10 +181,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--webhook-url",
-        default=config.get("webhook_url") or os.environ.get("DNS_ANALYZER_WEBHOOK_URL"),
+        default=config.get("webhook_url") or os.environ.get("DNSPECTOR_WEBHOOK_URL"),
         help=(
             "Slack- or Discord-compatible incoming webhook URL to send alerts to (only "
-            "used if --enable-alerts is set). Falls back to the DNS_ANALYZER_WEBHOOK_URL "
+            "used if --enable-alerts is set). Falls back to the DNSPECTOR_WEBHOOK_URL "
             "environment variable - preferred over a config file, to avoid committing it."
         ),
     )
@@ -300,7 +300,7 @@ def syslog_settings_from_args(args: argparse.Namespace) -> SyslogSettings:
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s [%(levelname)s] %(message)s")
-    logger.info("DNS Analyzer - developed by CipherxHub")
+    logger.info("DNSpector - developed by CipherxHub")
     logger.debug("Detection settings: %s", asdict(settings_from_args(args)))
 
     output_dir = Path(args.output_dir)

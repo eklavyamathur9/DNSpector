@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from dns_analyzer.config import load_config
+from dnspector.config import load_config
 
 
 class TestLoadConfig:

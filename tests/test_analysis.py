@@ -5,11 +5,11 @@ import time
 import pytest
 from scapy.all import DNS, DNSQR, IP, UDP, wrpcap
 
-from dns_analyzer.alerting import AlertSettings, WebhookAlerter
-from dns_analyzer.analysis import analyze_pcap
-from dns_analyzer.detection import DetectionSettings
-from dns_analyzer.syslog_forwarder import SyslogCefForwarder, SyslogSettings
-from dns_analyzer.threat_intel import ThreatIntelChecker, ThreatIntelSettings
+from dnspector.alerting import AlertSettings, WebhookAlerter
+from dnspector.analysis import analyze_pcap
+from dnspector.detection import DetectionSettings
+from dnspector.syslog_forwarder import SyslogCefForwarder, SyslogSettings
+from dnspector.threat_intel import ThreatIntelChecker, ThreatIntelSettings
 
 
 def _make_query(src, qname, dst="8.8.8.8", t=None):

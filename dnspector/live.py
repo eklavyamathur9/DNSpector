@@ -17,13 +17,13 @@ from typing import Any, Dict, List, Optional
 
 from scapy.all import Packet
 
-from dns_analyzer.alerting import WebhookAlerter, classify_severity
-from dns_analyzer.capture import capture_dns_packets
-from dns_analyzer.detection import DetectionSettings, LiveDetectionEngine, build_dns_record
-from dns_analyzer.export import generate_csv_report, write_stix_bundle
-from dns_analyzer.report import generate_pdf_report
-from dns_analyzer.syslog_forwarder import SyslogCefForwarder
-from dns_analyzer.threat_intel import ThreatIntelChecker, annotate_threat_intel
+from dnspector.alerting import WebhookAlerter, classify_severity
+from dnspector.capture import capture_dns_packets
+from dnspector.detection import DetectionSettings, LiveDetectionEngine, build_dns_record
+from dnspector.export import generate_csv_report, write_stix_bundle
+from dnspector.report import generate_pdf_report
+from dnspector.syslog_forwarder import SyslogCefForwarder
+from dnspector.threat_intel import ThreatIntelChecker, annotate_threat_intel
 
 logger = logging.getLogger(__name__)
 

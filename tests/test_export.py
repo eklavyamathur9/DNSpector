@@ -2,7 +2,7 @@ import csv
 import json
 from datetime import datetime, timezone
 
-from dns_analyzer.export import (
+from dnspector.export import (
     CSV_FIELDNAMES,
     build_stix_bundle,
     flatten_record,

@@ -7,12 +7,12 @@ from typing import Any, Dict, List, Optional
 
 from scapy.all import DNS, UDP, rdpcap
 
-from dns_analyzer.alerting import WebhookAlerter, classify_severity
-from dns_analyzer.detection import DetectionSettings, apply_detection_signals, build_dns_record
-from dns_analyzer.export import generate_csv_report, write_stix_bundle
-from dns_analyzer.report import generate_pdf_report
-from dns_analyzer.syslog_forwarder import SyslogCefForwarder
-from dns_analyzer.threat_intel import ThreatIntelChecker, apply_threat_intel
+from dnspector.alerting import WebhookAlerter, classify_severity
+from dnspector.detection import DetectionSettings, apply_detection_signals, build_dns_record
+from dnspector.export import generate_csv_report, write_stix_bundle
+from dnspector.report import generate_pdf_report
+from dnspector.syslog_forwarder import SyslogCefForwarder
+from dnspector.threat_intel import ThreatIntelChecker, apply_threat_intel
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def analyze_pcap(
       4. Severity classification + optional webhook alerting/syslog
          forwarding - fires once analysis completes. For alerts/forwards
          that go out the moment an anomaly is observed, use live capture
-         (dns_analyzer.live) instead.
+         (dnspector.live) instead.
       5. CSV export (if csv_file given) and a STIX 2.1 indicator bundle
          (if stix_file given), alongside the JSON/PDF output.
     """

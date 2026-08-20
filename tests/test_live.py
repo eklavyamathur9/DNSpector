@@ -4,12 +4,12 @@ import json
 import pytest
 from scapy.all import DNS, DNSQR, IP, UDP
 
-import dns_analyzer.capture as capture_module
-from dns_analyzer.alerting import AlertSettings, WebhookAlerter
-from dns_analyzer.detection import DetectionSettings
-from dns_analyzer.live import capture_and_detect_live
-from dns_analyzer.syslog_forwarder import SyslogCefForwarder, SyslogSettings
-from dns_analyzer.threat_intel import OpenPhishFeed, ThreatIntelChecker, ThreatIntelSettings
+import dnspector.capture as capture_module
+from dnspector.alerting import AlertSettings, WebhookAlerter
+from dnspector.detection import DetectionSettings
+from dnspector.live import capture_and_detect_live
+from dnspector.syslog_forwarder import SyslogCefForwarder, SyslogSettings
+from dnspector.threat_intel import OpenPhishFeed, ThreatIntelChecker, ThreatIntelSettings
 
 
 def _query(src, qname, t):

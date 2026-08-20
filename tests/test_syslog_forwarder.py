@@ -1,4 +1,4 @@
-from dns_analyzer.syslog_forwarder import (
+from dnspector.syslog_forwarder import (
     SyslogCefForwarder,
     SyslogSettings,
     format_cef,
@@ -23,7 +23,7 @@ def make_record(remark="Normal query", threat_intel=None, severity=None, **overr
 class TestFormatCef:
     def test_includes_cef_header_fields(self):
         message = format_cef(make_record(remark="High entropy domain name - Possible DGA or DNS Tunneling"), "high")
-        assert message.startswith("CEF:0|DNSAnalyzer|dns-analyzer|")
+        assert message.startswith("CEF:0|DNSpector|dnspector|")
         parts = message.split("|")
         assert parts[4] == "dns-anomaly"
         assert parts[6] == "7"  # SEVERITY_TO_CEF["high"]

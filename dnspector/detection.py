@@ -17,7 +17,7 @@ from typing import Any, Deque, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from scapy.all import DNS, DNSQR, IP, Packet
 
-from dns_analyzer.dns_parsing import calculate_entropy, parse_dns_flags, parse_domain
+from dnspector.dns_parsing import calculate_entropy, parse_dns_flags, parse_domain
 
 logger = logging.getLogger(__name__)
 

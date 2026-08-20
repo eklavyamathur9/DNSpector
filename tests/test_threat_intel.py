@@ -1,4 +1,4 @@
-from dns_analyzer.threat_intel import (
+from dnspector.threat_intel import (
     IOCCache,
     OpenPhishFeed,
     ThreatIntelChecker,

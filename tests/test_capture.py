@@ -1,8 +1,8 @@
 import pytest
 from scapy.all import DNS, DNSQR, IP, UDP
 
-import dns_analyzer.capture as capture_module
-from dns_analyzer.capture import capture_dns_packets
+import dnspector.capture as capture_module
+from dnspector.capture import capture_dns_packets
 
 
 def _dns_packet():

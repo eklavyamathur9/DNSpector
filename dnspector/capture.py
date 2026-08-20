@@ -22,7 +22,7 @@ def capture_dns_packets(
 
     If on_packet is given, it's called synchronously for every captured
     DNS+UDP packet as it arrives (used by the live/streaming pipeline in
-    dns_analyzer.live to run detection inline instead of only after the
+    dnspector.live to run detection inline instead of only after the
     whole capture window ends). It runs on the capture thread, so it
     should be fast - anything slow (e.g. a webhook call) will delay
     processing of subsequent packets.

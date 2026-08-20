@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dns-analyzer"
+name = "dnspector"
 dynamic = ["version"]
 description = "Capture and analyze DNS traffic for anomalies such as DNS tunneling and DGA-generated domains."
 readme = "README.md"
@@ -36,19 +36,19 @@ dependencies = [
 dev = ["pytest", "ruff"]
 
 [project.urls]
-Homepage = "https://github.com/eklavyamathur9/Dns-Analyser"
-Documentation = "https://github.com/eklavyamathur9/Dns-Analyser/blob/main/DOCUMENTATION.md"
-Changelog = "https://github.com/eklavyamathur9/Dns-Analyser/blob/main/CHANGELOG.md"
-Issues = "https://github.com/eklavyamathur9/Dns-Analyser/issues"
+Homepage = "https://github.com/eklavyamathur9/DNSpector"
+Documentation = "https://github.com/eklavyamathur9/DNSpector/blob/main/DOCUMENTATION.md"
+Changelog = "https://github.com/eklavyamathur9/DNSpector/blob/main/CHANGELOG.md"
+Issues = "https://github.com/eklavyamathur9/DNSpector/issues"
 
 [project.scripts]
-dns-analyzer = "dns_analyzer.cli:main"
+dnspector = "dnspector.cli:main"
 
 [tool.setuptools]
-packages = ["dns_analyzer"]
+packages = ["dnspector"]
 
 [tool.setuptools.dynamic]
-version = { attr = "dns_analyzer._version.__version__" }
+version = { attr = "dnspector._version.__version__" }
 
 [tool.ruff]
 line-length = 120

@@ -1,7 +1,7 @@
 import pytest
 from scapy.all import DNS
 
-from dns_analyzer.dns_parsing import OPCODES, RCODES, calculate_entropy, format_flags, parse_dns_flags, parse_domain
+from dnspector.dns_parsing import OPCODES, RCODES, calculate_entropy, format_flags, parse_dns_flags, parse_domain
 
 
 class TestCalculateEntropy:

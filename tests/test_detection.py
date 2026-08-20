@@ -3,7 +3,7 @@ import statistics
 import pytest
 from scapy.all import DNS, DNSQR, IP, UDP
 
-from dns_analyzer.detection import (
+from dnspector.detection import (
     DetectionSettings,
     HostEntropyBaseline,
     LiveDetectionEngine,
@@ -18,7 +18,7 @@ from dns_analyzer.detection import (
     entropy_z_score,
     generate_remark,
 )
-from dns_analyzer.dns_parsing import calculate_entropy
+from dnspector.dns_parsing import calculate_entropy
 
 
 def make_record(

@@ -15,7 +15,7 @@ A clear, concise description of what's wrong.
 ## To reproduce
 
 Steps to reproduce, ideally including:
-- The exact command / CLI flags you ran (`python Dns_Analyser.py ...`)
+- The exact command / CLI flags you ran (`python dnspector.py ...`)
 - Whether you're using batch mode or `--live`
 - A minimal example pcap or capture scenario, if the bug depends on specific DNS traffic
 
@@ -31,7 +31,7 @@ What actually happened - include the full error/traceback if there is one, and r
 
 - OS:
 - Python version (`python --version`):
-- `dns_analyzer` version / commit (`python -c "import dns_analyzer; print(dns_analyzer.__version__)"`):
+- `dnspector` version / commit (`python -c "import dnspector; print(dnspector.__version__)"`):
 - Relevant flags/config (threat-intel enabled? alerting? syslog? live mode?):
 
 ## Additional context

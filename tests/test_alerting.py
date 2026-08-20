@@ -1,4 +1,4 @@
-from dns_analyzer.alerting import (
+from dnspector.alerting import (
     AlertSettings,
     WebhookAlerter,
     classify_severity,

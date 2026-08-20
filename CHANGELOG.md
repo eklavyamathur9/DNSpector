@@ -34,7 +34,7 @@ No git tags exist yet for the versions below - they're recorded here retroactive
 - Local TTL cache for threat-intel verdicts (caches both malicious and clean results).
 
 ### Changed
-- Split the single ~630-line `Dns_Analyser.py` into the `dns_analyzer/` package (8 modules at the time). `Dns_Analyser.py` became a thin backward-compatible shim.
+- Split the single ~630-line `dnspector.py` into the `dnspector/` package (8 modules at the time). `dnspector.py` became a thin backward-compatible shim.
 
 ## [0.3.0] - 2026-08-20 (Phase 2 - Detection Quality Core)
 

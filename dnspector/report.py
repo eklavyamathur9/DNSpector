@@ -6,7 +6,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-from dns_analyzer.dns_parsing import format_flags
+from dnspector.dns_parsing import format_flags
 
 MARGIN_LEFT = 50
 MARGIN_TOP = 750
@@ -17,7 +17,7 @@ def generate_pdf_report(records: List[Dict[str, Any]], report_file: str) -> None
     """Render the final, fully-annotated records to a PDF report."""
     c = canvas.Canvas(report_file, pagesize=letter)
     c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString(300, 770, "DNS Traffic Analysis Report")
+    c.drawCentredString(300, 770, "DNSpector - DNS Traffic Analysis Report")
     c.setFont("Helvetica", 12)
     y_position = MARGIN_TOP
 

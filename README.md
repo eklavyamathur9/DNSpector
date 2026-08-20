@@ -1,8 +1,8 @@
-# DNS Traffic Analyzer
+# DNSpector
 
-[![CI](https://github.com/eklavyamathur9/Dns-Analyser/actions/workflows/ci.yml/badge.svg)](https://github.com/eklavyamathur9/Dns-Analyser/actions/workflows/ci.yml)
+[![CI](https://github.com/eklavyamathur9/DNSpector/actions/workflows/ci.yml/badge.svg)](https://github.com/eklavyamathur9/DNSpector/actions/workflows/ci.yml)
 
-The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze, and report DNS traffic. It provides insights into DNS queries, flags, and entropy, helping identify potential anomalies such as DNS tunneling, misconfigurations, or malicious activities.
+**DNSpector** is a Python-based tool designed to capture, analyze, and report DNS traffic. It provides insights into DNS queries, flags, and entropy, helping identify potential anomalies such as DNS tunneling, misconfigurations, or malicious activities.
 
 ---
 
@@ -11,7 +11,7 @@ The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze
 A snippet of `--live --enable-alerts` catching a synthetic DNS-tunneling burst as it happens (real log output from a synthetic capture - each `[HIGH]` line fires the moment that packet crosses the detection threshold, not after the run ends):
 
 ```
-2026-08-20 23:22:46 [INFO] DNS Analyzer - developed by CipherxHub
+2026-08-20 23:22:46 [INFO] DNSpector - developed by CipherxHub
 2026-08-20 23:22:46 [INFO] Threat-intel checks enabled (OpenPhish).
 2026-08-20 23:22:46 [INFO] Webhook alerting enabled (min severity: high).
 2026-08-20 23:22:46 [INFO] Capturing DNS traffic for 30 seconds on interface eth0...
@@ -64,8 +64,8 @@ For the ordered, checklist-driven plan for evolving this project (engineering ha
 
 1. Clone the repository:
      ```bash
-     git clone https://github.com/eklavyamathur9/Dns-Analyser.git
-     cd Dns-Analyser
+     git clone https://github.com/eklavyamathur9/DNSpector.git
+     cd DNSpector
      ```
 
 2. Install dependencies:
@@ -73,7 +73,7 @@ For the ordered, checklist-driven plan for evolving this project (engineering ha
      pip install -r requirements.txt
      ```
 
-Alternatively, install it as a package (`pip install -e .`, using `pyproject.toml`) to get a `dns-analyzer` console command on your `PATH` instead of invoking the script directly - useful if you want to run it from outside the repo. `sudo`, needed for raw capture either way, generally requires an absolute path or a shell that keeps its `PATH`; a venv's `dns-analyzer` under `sudo` may need `sudo $(which dns-analyzer)` or `sudo -E`.
+Alternatively, install it as a package (`pip install -e .`, using `pyproject.toml`) to get a `dnspector` console command on your `PATH` instead of invoking the script directly - useful if you want to run it from outside the repo. `sudo`, needed for raw capture either way, generally requires an absolute path or a shell that keeps its `PATH`; a venv's `dnspector` under `sudo` may need `sudo $(which dnspector)` or `sudo -E`.
 
 ---
 
@@ -82,25 +82,25 @@ Alternatively, install it as a package (`pip install -e .`, using `pyproject.tom
 Run the script with the built-in default settings (60-second capture, current directory for output). Raw packet capture needs elevated privileges, so this typically requires `sudo`:
 
 ```bash
-sudo python Dns_Analyser.py
+sudo python dnspector.py
 ```
 
 Or configure it via CLI flags:
 
 ```bash
-sudo python Dns_Analyser.py --duration 30 --iface eth0 --entropy-threshold 4.0 --output-dir ./reports
+sudo python dnspector.py --duration 30 --iface eth0 --entropy-threshold 4.0 --output-dir ./reports
 ```
 
 Detection thresholds are also tunable, e.g. to make subdomain-burst (tunneling) detection more sensitive on a short capture:
 
 ```bash
-sudo python Dns_Analyser.py --burst-window-seconds 30 --burst-unique-subdomain-threshold 8 --z-score-threshold 2.5
+sudo python dnspector.py --burst-window-seconds 30 --burst-unique-subdomain-threshold 8 --z-score-threshold 2.5
 ```
 
-Run `python Dns_Analyser.py --help` for the full list of options. Any of these can also be set as defaults in a JSON config file (see `config.example.json`) and passed with `--config`:
+Run `python dnspector.py --help` for the full list of options. Any of these can also be set as defaults in a JSON config file (see `config.example.json`) and passed with `--config`:
 
 ```bash
-sudo python Dns_Analyser.py --config config.example.json
+sudo python dnspector.py --config config.example.json
 ```
 
 CLI flags always override the config file, which overrides the built-in defaults.
@@ -118,7 +118,7 @@ After capturing, the tool will:
 Threat-intel checks are **off by default** - enabling them sends every observed domain to third-party services, which is a real privacy/opsec consideration for a tool that may be monitoring sensitive network traffic. Turn them on explicitly with `--enable-threat-intel`:
 
 ```bash
-sudo python Dns_Analyser.py --enable-threat-intel
+sudo python dnspector.py --enable-threat-intel
 ```
 
 With no API keys configured, this checks domains against the free [OpenPhish](https://openphish.com/) feed only. URLhaus and VirusTotal need a free API key each - set them via environment variables (preferred, so keys never end up in a config file or shell history) rather than CLI flags or `config.example.json`:
@@ -126,7 +126,7 @@ With no API keys configured, this checks domains against the free [OpenPhish](ht
 ```bash
 export URLHAUS_API_KEY="..."      # free account at https://auth.abuse.ch/
 export VIRUSTOTAL_API_KEY="..."   # free account at https://www.virustotal.com/
-sudo -E python Dns_Analyser.py --enable-threat-intel
+sudo -E python dnspector.py --enable-threat-intel
 ```
 
 (`--urlhaus-api-key`/`--virustotal-api-key` CLI flags also exist and take precedence over the environment variables, if you do need to pass them explicitly.) Note that `sudo` clears the environment by default - use `sudo -E` (as above) to preserve it, or the tool will fall back to OpenPhish-only.
@@ -138,7 +138,7 @@ sudo -E python Dns_Analyser.py --enable-threat-intel
 By default the tool captures for the full duration, *then* analyzes everything at once. `--live` switches to inline detection - each packet is scored (and, if threat-intel/alerting are enabled, checked/alerted on) the moment it's captured, using streaming versions of the same statistical algorithms:
 
 ```bash
-sudo python Dns_Analyser.py --live --duration 120
+sudo python dnspector.py --live --duration 120
 ```
 
 Pass `--duration 0` (or any non-positive value) to capture indefinitely until you stop it with Ctrl+C - useful for `--live` monitoring that isn't tied to a fixed window. The same JSON/PDF output is written once capture ends either way.
@@ -146,8 +146,8 @@ Pass `--duration 0` (or any non-positive value) to capture indefinitely until yo
 Combine with webhook alerting to get notified as anomalies are found, rather than only after the run finishes:
 
 ```bash
-export DNS_ANALYZER_WEBHOOK_URL="https://hooks.slack.com/services/..."  # or a Discord webhook URL
-sudo -E python Dns_Analyser.py --live --enable-alerts --alert-min-severity high
+export DNSPECTOR_WEBHOOK_URL="https://hooks.slack.com/services/..."  # or a Discord webhook URL
+sudo -E python dnspector.py --live --enable-alerts --alert-min-severity high
 ```
 
 Alerting also works in the default (non-`--live`) batch mode - alerts just fire once analysis completes rather than in real time. Severity is one of `info` / `medium` / `high` / `critical` (a confirmed threat-intel match is always `critical`); `--alert-min-severity` controls the cutoff.
@@ -163,7 +163,7 @@ A flattened **CSV** is written alongside JSON/PDF by default (`--csv-file`, `out
 **Syslog/CEF forwarding** sends each record as a CEF-formatted syslog message to a SIEM, over UDP or TCP:
 
 ```bash
-sudo python Dns_Analyser.py --enable-syslog --syslog-host siem.internal --syslog-port 514
+sudo python dnspector.py --enable-syslog --syslog-host siem.internal --syslog-port 514
 ```
 
 Unlike webhook alerting's "high" default, syslog forwarding defaults to `--syslog-min-severity info` - the point of sending data to a SIEM is usually full-fidelity event history for later search/correlation, not just the loud stuff. Tune it down to `high`/`critical` if you only want a SIEM copy of what would also trigger a webhook alert.
@@ -171,7 +171,7 @@ Unlike webhook alerting's "high" default, syslog forwarding defaults to `--syslo
 **STIX 2.1 export** writes one Indicator object per unique domain confirmed malicious by threat intel (only useful combined with `--enable-threat-intel`):
 
 ```bash
-sudo python Dns_Analyser.py --enable-threat-intel --export-stix --stix-file iocs.json
+sudo python dnspector.py --enable-threat-intel --export-stix --stix-file iocs.json
 ```
 
 Both work in batch mode (written/forwarded once analysis completes) and `--live` mode (syslog forwarding fires inline per record, same as webhook alerting; CSV/STIX are still written once at the end, since they're whole-batch artifacts).
@@ -180,7 +180,7 @@ Both work in batch mode (written/forwarded once analysis completes) and `--live`
 
 ## Project Structure
 
-The implementation lives in the `dns_analyzer/` package, split by concern:
+The implementation lives in the `dnspector/` package, split by concern:
 
 | Module | Responsibility |
 |---|---|
@@ -197,13 +197,13 @@ The implementation lives in the `dns_analyzer/` package, split by concern:
 | `config.py` | JSON config file loading |
 | `cli.py` | Argument parsing and the `main()` entry point |
 
-`Dns_Analyser.py` at the repo root is a thin backward-compatible shim - `python Dns_Analyser.py` and `python -m dns_analyzer` are equivalent.
+`dnspector.py` at the repo root is a thin backward-compatible shim - `python dnspector.py` and `python -m dnspector` are equivalent.
 
 ---
 
 ## Running Tests
 
-The full pipeline - entropy scoring, DNS flag parsing, statistical baselining (batch and streaming), burst/NXDOMAIN detection (batch and streaming), threat-intel checks, webhook alerting, and syslog/CEF forwarding (all via injected fake fetchers/senders, no real network calls), CSV/STIX export, CLI parsing, packet capture (via a monkeypatched `sniff()`), and end-to-end synthetic-pcap tests for both batch and live pipelines - is covered by a `pytest` suite in `tests/`, organized to mirror the `dns_analyzer/` package.
+The full pipeline - entropy scoring, DNS flag parsing, statistical baselining (batch and streaming), burst/NXDOMAIN detection (batch and streaming), threat-intel checks, webhook alerting, and syslog/CEF forwarding (all via injected fake fetchers/senders, no real network calls), CSV/STIX export, CLI parsing, packet capture (via a monkeypatched `sniff()`), and end-to-end synthetic-pcap tests for both batch and live pipelines - is covered by a `pytest` suite in `tests/`, organized to mirror the `dnspector/` package.
 
 ```bash
 pip install -r requirements-dev.txt

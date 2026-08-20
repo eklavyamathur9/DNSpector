@@ -74,7 +74,7 @@ def _send_webhook(url: str, payload: Dict[str, Any], timeout: float) -> None:
     """
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json", "User-Agent": "dns-analyzer"}
+        url, data=data, headers={"Content-Type": "application/json", "User-Agent": "dnspector"}
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         resp.read()

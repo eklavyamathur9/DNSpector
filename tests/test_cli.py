@@ -1,6 +1,6 @@
 import json
 
-from dns_analyzer.cli import (
+from dnspector.cli import (
     alert_settings_from_args,
     parse_args,
     settings_from_args,
@@ -81,7 +81,7 @@ class TestParseArgs:
         assert parse_args(["--duration", "-1"]).duration == -1
 
     def test_alerts_disabled_by_default(self, monkeypatch):
-        monkeypatch.delenv("DNS_ANALYZER_WEBHOOK_URL", raising=False)
+        monkeypatch.delenv("DNSPECTOR_WEBHOOK_URL", raising=False)
         args = parse_args([])
         assert args.enable_alerts is False
         assert args.webhook_url is None
@@ -93,12 +93,12 @@ class TestParseArgs:
         assert args.webhook_url == "https://example.invalid/hook"
 
     def test_webhook_url_falls_back_to_env_var(self, monkeypatch):
-        monkeypatch.setenv("DNS_ANALYZER_WEBHOOK_URL", "https://example.invalid/env-hook")
+        monkeypatch.setenv("DNSPECTOR_WEBHOOK_URL", "https://example.invalid/env-hook")
         args = parse_args([])
         assert args.webhook_url == "https://example.invalid/env-hook"
 
     def test_webhook_url_cli_flag_overrides_env_var(self, monkeypatch):
-        monkeypatch.setenv("DNS_ANALYZER_WEBHOOK_URL", "https://example.invalid/env-hook")
+        monkeypatch.setenv("DNSPECTOR_WEBHOOK_URL", "https://example.invalid/env-hook")
         args = parse_args(["--webhook-url", "https://example.invalid/cli-hook"])
         assert args.webhook_url == "https://example.invalid/cli-hook"
 
@@ -175,7 +175,7 @@ class TestAlertSettingsFromArgs:
         assert settings.min_severity == "critical"
 
     def test_disabled_when_flag_not_passed(self, monkeypatch):
-        monkeypatch.delenv("DNS_ANALYZER_WEBHOOK_URL", raising=False)
+        monkeypatch.delenv("DNSPECTOR_WEBHOOK_URL", raising=False)
         settings = alert_settings_from_args(parse_args([]))
         assert settings.enabled is False
 

@@ -41,7 +41,7 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from dns_analyzer.dns_parsing import parse_domain
+from dnspector.dns_parsing import parse_domain
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ def _fetch_urlhaus(domain: str, api_key: str, timeout: float) -> Dict[str, Any]:
     """
     data = urllib.parse.urlencode({"host": domain}).encode()
     req = urllib.request.Request(
-        URLHAUS_HOST_API, data=data, headers={"User-Agent": "dns-analyzer", "Auth-Key": api_key}
+        URLHAUS_HOST_API, data=data, headers={"User-Agent": "dnspector", "Auth-Key": api_key}
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
@@ -100,7 +100,7 @@ def _fetch_urlhaus(domain: str, api_key: str, timeout: float) -> Dict[str, Any]:
 
 def _fetch_openphish_feed(timeout: float) -> str:
     """Download the free OpenPhish active-phishing-URL feed as plain text."""
-    req = urllib.request.Request(OPENPHISH_FEED_URL, headers={"User-Agent": "dns-analyzer"})
+    req = urllib.request.Request(OPENPHISH_FEED_URL, headers={"User-Agent": "dnspector"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode()
 
@@ -109,7 +109,7 @@ def _fetch_virustotal(domain: str, api_key: str, timeout: float) -> Dict[str, An
     """Query the VirusTotal v3 domain report API. Raises on network/HTTP errors."""
     req = urllib.request.Request(
         f"{VIRUSTOTAL_DOMAIN_API}/{domain}",
-        headers={"x-apikey": api_key, "User-Agent": "dns-analyzer"},
+        headers={"x-apikey": api_key, "User-Agent": "dnspector"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())

@@ -1,4 +1,4 @@
-# Contributing to DNS Analyzer
+# Contributing to DNSpector
 
 Thanks for considering a contribution! This is a personal/portfolio project, but it's built to a "real project" standard - tested, linted, documented - and genuinely welcomes outside contributions.
 
@@ -12,13 +12,13 @@ Thanks for considering a contribution! This is a personal/portfolio project, but
 ## Dev setup
 
 ```bash
-git clone https://github.com/eklavyamathur9/Dns-Analyser.git
-cd Dns-Analyser
+git clone https://github.com/eklavyamathur9/DNSpector.git
+cd DNSpector
 python -m venv venv && source venv/bin/activate  # optional but recommended
 pip install -r requirements-dev.txt
 ```
 
-Run the tool itself with `sudo python Dns_Analyser.py` (raw packet capture needs elevated privileges) - see [README.md](README.md) for the full CLI.
+Run the tool itself with `sudo python dnspector.py` (raw packet capture needs elevated privileges) - see [README.md](README.md) for the full CLI.
 
 ## Running tests
 
@@ -26,7 +26,7 @@ Run the tool itself with `sudo python Dns_Analyser.py` (raw packet capture needs
 pytest tests/ -v
 ```
 
-The suite is organized to mirror the `dns_analyzer/` package (`tests/test_detection.py` tests `dns_analyzer/detection.py`, and so on). It runs with **zero real network access, root privileges, or webhook/syslog endpoints required** - every network-touching component (`threat_intel.py`, `alerting.py`, `syslog_forwarder.py`) takes an injectable function for the actual send/fetch, and tests supply a fake one. `tests/test_capture.py`/`tests/test_live.py` similarly monkeypatch `scapy.sniff()` rather than doing a real capture. If you add code that touches the network or capture, follow this pattern rather than mocking at the `unittest.mock` level or skipping the test in CI.
+The suite is organized to mirror the `dnspector/` package (`tests/test_detection.py` tests `dnspector/detection.py`, and so on). It runs with **zero real network access, root privileges, or webhook/syslog endpoints required** - every network-touching component (`threat_intel.py`, `alerting.py`, `syslog_forwarder.py`) takes an injectable function for the actual send/fetch, and tests supply a fake one. `tests/test_capture.py`/`tests/test_live.py` similarly monkeypatch `scapy.sniff()` rather than doing a real capture. If you add code that touches the network or capture, follow this pattern rather than mocking at the `unittest.mock` level or skipping the test in CI.
 
 CI runs the same suite plus lint on every push/PR - see `.github/workflows/ci.yml`.
 
@@ -61,31 +61,31 @@ Skim [DOCUMENTATION.md](DOCUMENTATION.md) section 1 first - it's a full module-b
 
 Filed as real issues, labeled `good first issue`, pulled from the project's own documented gaps (see [DOCUMENTATION.md](DOCUMENTATION.md) §1.4 and §3, and [PHASES.md](PHASES.md) for full context on each):
 
-- [#1 - Wire up `mypy` in CI alongside `ruff`](https://github.com/eklavyamathur9/Dns-Analyser/issues/1)
-- [#2 - Backport the sliding-window burst tracker to batch mode](https://github.com/eklavyamathur9/Dns-Analyser/issues/2)
-- [#3 - Alert/syslog-forward de-duplication (cooldown per host+alert-type)](https://github.com/eklavyamathur9/Dns-Analyser/issues/3)
-- [#4 - Typosquatting detection (Levenshtein distance against known-brand domains)](https://github.com/eklavyamathur9/Dns-Analyser/issues/4)
-- [#5 - Live dashboard (Streamlit or Flask) for `--live` mode](https://github.com/eklavyamathur9/Dns-Analyser/issues/5)
+- [#1 - Wire up `mypy` in CI alongside `ruff`](https://github.com/eklavyamathur9/DNSpector/issues/1)
+- [#2 - Backport the sliding-window burst tracker to batch mode](https://github.com/eklavyamathur9/DNSpector/issues/2)
+- [#3 - Alert/syslog-forward de-duplication (cooldown per host+alert-type)](https://github.com/eklavyamathur9/DNSpector/issues/3)
+- [#4 - Typosquatting detection (Levenshtein distance against known-brand domains)](https://github.com/eklavyamathur9/DNSpector/issues/4)
+- [#5 - Live dashboard (Streamlit or Flask) for `--live` mode](https://github.com/eklavyamathur9/DNSpector/issues/5)
 
-None of these require deep familiarity with the whole codebase to start - each touches one or two files with existing test patterns to follow. See the [full issue list](https://github.com/eklavyamathur9/Dns-Analyser/issues) for anything newer, or [Discussions](https://github.com/eklavyamathur9/Dns-Analyser/discussions) to propose your own idea before writing code.
+None of these require deep familiarity with the whole codebase to start - each touches one or two files with existing test patterns to follow. See the [full issue list](https://github.com/eklavyamathur9/DNSpector/issues) for anything newer, or [Discussions](https://github.com/eklavyamathur9/DNSpector/discussions) to propose your own idea before writing code.
 
 ## Publishing a release (maintainers)
 
-Releases publish to PyPI via `.github/workflows/publish.yml`, using PyPI's [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) - no API token is stored in this repo. **One-time setup**, done once by whoever owns the `dns-analyzer` name on PyPI:
+Releases publish to PyPI via `.github/workflows/publish.yml`, using PyPI's [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) - no API token is stored in this repo. **One-time setup**, done once by whoever owns the `dnspector` name on PyPI:
 
 1. Create a PyPI account (or log in) at [pypi.org](https://pypi.org/), if you haven't already.
 2. Go to [pypi.org/manage/account/publishing/](https://pypi.org/manage/account/publishing/) and add a new pending trusted publisher for a *new* project:
-   - PyPI project name: `dns-analyzer`
+   - PyPI project name: `dnspector`
    - Owner: `eklavyamathur9`
-   - Repository name: `Dns-Analyser`
+   - Repository name: `DNSpector`
    - Workflow name: `publish.yml`
    - Environment name: `pypi`
 3. That's it - no secret to copy anywhere.
 
 **Every release after that**, just:
 
-1. Bump `__version__` in `dns_analyzer/_version.py` and add a `CHANGELOG.md` entry.
-2. Tag it (`git tag v0.7.0 && git push --tags`) and [publish a GitHub Release](https://github.com/eklavyamathur9/Dns-Analyser/releases/new) from that tag.
+1. Bump `__version__` in `dnspector/_version.py` and add a `CHANGELOG.md` entry.
+2. Tag it (`git tag v0.7.0 && git push --tags`) and [publish a GitHub Release](https://github.com/eklavyamathur9/DNSpector/releases/new) from that tag.
 3. The `publish.yml` workflow builds and publishes to PyPI automatically once the Release is published.
 
 ## License

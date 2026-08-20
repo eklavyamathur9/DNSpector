@@ -1,4 +1,4 @@
-# DNS Analyzer — Technical Documentation
+# DNSpector — Technical Documentation
 
 This document is a deep dive into **how the tool actually works**, **the DNS/security theory behind the detection logic**, and a **roadmap of improvements** to turn this from a learning script into a portfolio-grade cybersecurity project. For install/run instructions, see [README.md](README.md).
 
@@ -6,7 +6,7 @@ This document is a deep dive into **how the tool actually works**, **the DNS/sec
 
 ## 1. How the Project Works (Code Walkthrough)
 
-The implementation lives in the `dns_analyzer/` package (split into modules during Phase 3, once the single-file layout from Phase 0/1/2 genuinely became unwieldy — see §3.2). `Dns_Analyser.py` at the repo root is now a thin backward-compatible shim that just calls into `dns_analyzer.cli.main()`, so `python Dns_Analyser.py` and `python -m dns_analyzer` behave identically.
+The implementation lives in the `dnspector/` package (split into modules during Phase 3, once the single-file layout from Phase 0/1/2 genuinely became unwieldy — see §3.2). `dnspector.py` at the repo root is now a thin backward-compatible shim that just calls into `dnspector.cli.main()`, so `python dnspector.py` and `python -m dnspector` behave identically.
 
 | Module | Responsibility |
 |---|---|
@@ -80,9 +80,9 @@ flowchart LR
 
 ### 1.1a CLI, config file, and logging
 
-- `cli.parse_args()` builds an `argparse` parser with `--duration`, `--iface`, `--output-dir`, `--entropy-threshold`, plus the Phase 2 detection-threshold flags, the Phase 3 threat-intel flags (§1.3d), and the Phase 4 `--live`/`--enable-alerts`/`--webhook-url`/`--alert-min-severity` flags (§1.2a/§1.3f). Run `python Dns_Analyser.py --help` for the full list.
+- `cli.parse_args()` builds an `argparse` parser with `--duration`, `--iface`, `--output-dir`, `--entropy-threshold`, plus the Phase 2 detection-threshold flags, the Phase 3 threat-intel flags (§1.3d), and the Phase 4 `--live`/`--enable-alerts`/`--webhook-url`/`--alert-min-severity` flags (§1.2a/§1.3f). Run `python dnspector.py --help` for the full list.
 - `--config <path>` points at a JSON file (see `config.example.json`) whose keys become the *defaults* for every other flag. Precedence is **CLI flag > config file > built-in default** — implemented via a two-pass parse: a lightweight `pre_parser` extracts just `--config` first (via `parse_known_args`), `config.load_config()` reads it, and those values seed the real parser's `default=` arguments before the full `argv` is parsed again.
-- All logging goes through Python's `logging` module. Each module gets its own logger via `logging.getLogger(__name__)` (e.g. `dns_analyzer.capture`, `dns_analyzer.threat_intel`) — standard hierarchical-logger practice, so log lines are traceable to their module and could be filtered per-module if needed. `cli.main()` configures the root handler once via `logging.basicConfig(level=..., format=...)` based on `--log-level`; every module's logger propagates up to it.
+- All logging goes through Python's `logging` module. Each module gets its own logger via `logging.getLogger(__name__)` (e.g. `dnspector.capture`, `dnspector.threat_intel`) — standard hierarchical-logger practice, so log lines are traceable to their module and could be filtered per-module if needed. `cli.main()` configures the root handler once via `logging.basicConfig(level=..., format=...)` based on `--log-level`; every module's logger propagates up to it.
 
 ### 1.2 Analysis phase (batch mode - the default)
 
@@ -203,7 +203,7 @@ All three classes are pure/in-memory (no I/O), so `tests/test_detection.py`'s `T
 
 `syslog_forwarder.py` formats records as [CEF](https://www.microfocus.com/documentation/arcsight/arcsight-smartconnectors/pdfdoc/common-event-format-v25/common-event-format-v25.pdf) (Common Event Format) - the format most SIEMs (Splunk, QRadar, ArcSight, and general syslog-CEF listeners) parse out of the box - and forwards them over syslog, mirroring `alerting.py`'s design almost exactly:
 
-- **`format_cef(record, severity)`** builds a single CEF line: a 7-field pipe-delimited header (`CEF:0|DNSAnalyzer|dns-analyzer|<version>|dns-anomaly|<name>|<severity 0-10>`) followed by space-separated `key=value` extension fields (`src`, `dst`, `request`, `msg`, plus custom `cs1`/`cn1`/`cs2` fields for the registrable domain, entropy, and severity label). CEF has its own escaping rules, different for header vs. extension fields (`_cef_escape_header`/`_cef_escape_extension`) - a literal `|` or `\` in a header field, or `=` or `\` in an extension value, has to be backslash-escaped or it would corrupt the message's field boundaries for the receiving parser.
+- **`format_cef(record, severity)`** builds a single CEF line: a 7-field pipe-delimited header (`CEF:0|DNSpector|dnspector|<version>|dns-anomaly|<name>|<severity 0-10>`) followed by space-separated `key=value` extension fields (`src`, `dst`, `request`, `msg`, plus custom `cs1`/`cn1`/`cs2` fields for the registrable domain, entropy, and severity label). CEF has its own escaping rules, different for header vs. extension fields (`_cef_escape_header`/`_cef_escape_extension`) - a literal `|` or `\` in a header field, or `=` or `\` in an extension value, has to be backslash-escaped or it would corrupt the message's field boundaries for the receiving parser.
 - **`SyslogCefForwarder.maybe_forward(record)`** — same shape as `WebhookAlerter.maybe_alert()`: checks the record's severity against a configured minimum, sends via an injectable function if it qualifies, and fails open (logs a warning, doesn't raise) on a network error. One real difference: `--syslog-min-severity` **defaults to `info`** (forward everything), not `high` like `--alert-min-severity` - the point of a SIEM feed is usually full-fidelity event history for later search/correlation, not just the loud stuff a human needs to see immediately.
 - **Holds a real resource (a socket)**, unlike the other injectable-network patterns in this project - `logging.handlers.SysLogHandler` opens a UDP or TCP connection at construction time (when no `sender` is injected). `SyslogCefForwarder.close()` releases it; `cli.main()` calls this in a `finally` block so the socket doesn't leak if the pipeline function raises partway through. Constructing a `SyslogCefForwarder` with no host configured and no injected `sender` is a deliberate no-op (never opens a real socket) rather than raising, so tests and library callers can safely construct one speculatively and check `settings.host` before deciding whether to use it.
 
@@ -282,7 +282,7 @@ Grouped by theme, roughly in order of impact-per-effort. You don't need all of t
 - ~~**Unit tests** (`pytest`)~~ **Done** — see `tests/` (95 cases across `test_dns_parsing.py`, `test_detection.py`, `test_threat_intel.py`, `test_config.py`, `test_cli.py`, `test_analysis.py`), including a real synthetic-pcap end-to-end test (`test_analysis.py::TestAnalyzePcapEndToEnd`) that closes the "still open" item this bullet used to name.
 - ~~**CI pipeline**~~ **Done** (Phase 1) — `.github/workflows/ci.yml` runs `ruff check` + `pytest` on every push/PR to `main`. **Still open:** type-checking (`mypy`) isn't wired in yet.
 - ~~**Type hints**~~ **Done** (Phase 1) — throughout.
-- ~~**Split into modules**~~ **Done** (Phase 3) — `dns_analyzer/` package: `dns_parsing.py`, `detection.py`, `threat_intel.py`, `capture.py`, `analysis.py`, `report.py`, `config.py`, `cli.py` (see §1's module table). `Dns_Analyser.py` is now a thin backward-compatible shim. Deferred through Phase 1/2 as documented there; landed once Phase 3's threat-intel code made the single-file layout genuinely unwieldy (~630 lines before the split).
+- ~~**Split into modules**~~ **Done** (Phase 3) — `dnspector/` package: `dns_parsing.py`, `detection.py`, `threat_intel.py`, `capture.py`, `analysis.py`, `report.py`, `config.py`, `cli.py` (see §1's module table). `dnspector.py` is now a thin backward-compatible shim. Deferred through Phase 1/2 as documented there; landed once Phase 3's threat-intel code made the single-file layout genuinely unwieldy (~630 lines before the split).
 - ~~**Config file**~~ **Done** (Phase 1, §1.1a) — JSON config via `--config`, `config.example.json`; CLI flags override it. API keys (URLhaus/VirusTotal) are deliberately *not* config-file keys — see §1.3d for why environment variables are preferred.
 
 ### 3.3 Live/streaming capability

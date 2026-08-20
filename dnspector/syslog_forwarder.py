@@ -17,13 +17,13 @@ import socket
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
-from dns_analyzer._version import __version__
-from dns_analyzer.alerting import SEVERITY_LEVELS, classify_severity
+from dnspector._version import __version__
+from dnspector.alerting import SEVERITY_LEVELS, classify_severity
 
 logger = logging.getLogger(__name__)
 
-CEF_VENDOR = "DNSAnalyzer"
-CEF_PRODUCT = "dns-analyzer"
+CEF_VENDOR = "DNSpector"
+CEF_PRODUCT = "dnspector"
 CEF_SIGNATURE_ID = "dns-anomaly"
 # Rough CEF severity buckets (0-10 scale): Low/Medium/High/Very-High.
 SEVERITY_TO_CEF = {"info": 1, "medium": 4, "high": 7, "critical": 10}
@@ -114,7 +114,7 @@ class SyslogCefForwarder:
 
     def _emit(self, message: str) -> None:
         log_record = logging.LogRecord(
-            name="dns_analyzer.cef", level=logging.INFO, pathname="", lineno=0,
+            name="dnspector.cef", level=logging.INFO, pathname="", lineno=0,
             msg=message, args=None, exc_info=None,
         )
         self._handler.emit(log_record)

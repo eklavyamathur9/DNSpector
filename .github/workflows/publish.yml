@@ -1,7 +1,7 @@
 name: Publish to PyPI
 
 # Only runs when a GitHub Release is published (a deliberate, manual action -
-# see https://github.com/eklavyamathur9/Dns-Analyser/releases/new). Uses PyPI
+# see https://github.com/eklavyamathur9/DNSpector/releases/new). Uses PyPI
 # "Trusted Publishing" (OIDC) - no API token/secret stored in this repo.
 # This requires a one-time setup step on pypi.org before it can succeed; see
 # CONTRIBUTING.md "Publishing a release" for the full walkthrough.
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/dns-analyzer/
+      url: https://pypi.org/project/dnspector/
     permissions:
       id-token: write  # required for PyPI Trusted Publishing
     steps:
