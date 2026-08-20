@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+
+# Tool output (generated at runtime, not source)
+dns_capture.pcap
+output.json
+dns_report.pdf

@@ -16,6 +16,12 @@ The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze
 
 ---
 
+## Documentation
+
+For a deep dive into how the capture/analysis pipeline works internally, the DNS/security theory behind the entropy and flag-based detection, known limitations, and a concrete roadmap for extending this into a more advanced security tool (with resume-ready framing), see **[DOCUMENTATION.md](DOCUMENTATION.md)**.
+
+---
+
 ## Installation
 
 1. Clone the repository:
@@ -45,6 +51,17 @@ The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze
      - Analyze the packets and save results to:
          - `output.json` (JSON format)
          - `dns_report.pdf` (PDF report)
+
+---
+
+## Running Tests
+
+The core detection logic (entropy scoring, DNS flag parsing, remark generation) is covered by a `pytest` suite in `tests/`.
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
 
 ---
 

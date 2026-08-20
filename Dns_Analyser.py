@@ -19,8 +19,24 @@ MARGIN_LEFT = 50
 MARGIN_TOP = 750
 LINE_SPACING = 20
 
+# DNS Opcode / RCODE value -> name lookups (RFC 1035, RFC 6895).
+# Using dicts with a fallback instead of list indexing avoids IndexError
+# on the less common values (e.g. NOTIFY/UPDATE opcodes, extended RCODEs)
+# that a fixed-size list would silently not cover.
+OPCODES = {
+    0: "QUERY", 1: "IQUERY", 2: "STATUS", 3: "RESERVED",
+    4: "NOTIFY", 5: "UPDATE", 6: "DSO",
+}
+RCODES = {
+    0: "NOERROR", 1: "FORMERR", 2: "SERVFAIL", 3: "NXDOMAIN",
+    4: "NOTIMP", 5: "REFUSED", 6: "YXDOMAIN", 7: "YXRRSET",
+    8: "NXRRSET", 9: "NOTAUTH", 10: "NOTZONE",
+}
+
 def calculate_entropy(domain):
     """Calculate Shannon entropy of a domain name."""
+    if not domain:
+        return 0.0
     prob = [float(domain.count(c)) / len(domain) for c in set(domain)]
     return -sum(p * np.log2(p) for p in prob)
 
@@ -28,12 +44,12 @@ def parse_dns_flags(dns):
     """Map DNS flag values to human-readable format."""
     return {
         "qr": "RESPONSE" if dns.qr else "QUERY",
-        "opcode": ["QUERY", "IQUERY", "STATUS", "RESERVED"][dns.opcode],
+        "opcode": OPCODES.get(dns.opcode, f"UNKNOWN({dns.opcode})"),
         "aa": "TRUE" if dns.aa else "FALSE",
         "tc": "TRUE" if dns.tc else "FALSE",
         "rd": "TRUE" if dns.rd else "FALSE",
         "ra": "TRUE" if dns.ra else "FALSE",
-        "rcode": ["NOERROR", "FERROR", "SFAILURE", "NERROR", "NIMPLEMENTED", "REFUSED", "RESERVED"][dns.rcode]
+        "rcode": RCODES.get(dns.rcode, f"UNKNOWN({dns.rcode})"),
     }
 
 def format_flags(flags):
