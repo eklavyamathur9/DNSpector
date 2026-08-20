@@ -1,6 +1,14 @@
 # DNSpector — Technical Documentation
 
-This document is a deep dive into **how the tool actually works**, **the DNS/security theory behind the detection logic**, and a **roadmap of improvements** to turn this from a learning script into a portfolio-grade cybersecurity project. For install/run instructions, see [README.md](README.md).
+This document is a deep dive into **how the tool actually works**, **the DNS/security theory behind the detection logic**, a **roadmap of improvements**, and **how the project itself is packaged, governed, and named**. For install/run instructions, see [README.md](README.md).
+
+**Document map:**
+
+1. **How the Project Works** — module-by-module code walkthrough: capture, batch analysis, live/streaming analysis, and every detection function, in the order they run.
+2. **How DNS Analysis Works** — the underlying protocol and security theory: why entropy, why these DNS flags, and what real DNS security tooling does that this project still doesn't.
+3. **Improvement Roadmap** — every planned improvement, grouped by theme, marked done/open, with suggested resume framing.
+4. **Project Governance, Packaging & the Rename to DNSpector** — contributor docs, PyPI packaging, repo configuration, and the full story of the Phase 7 rebrand.
+5. **Why This Is a Valuable Cybersecurity Project** — interview framing.
 
 ---
 
@@ -121,7 +129,7 @@ For each unique character in the domain string, it computes that character's fre
 
 **`dns_parsing.parse_domain(domain)`** (Phase 2) — uses [`tldextract`](https://github.com/john-kurkowski/tldextract) (configured with `suffix_list_urls=()`, so it only ever consults its bundled Public Suffix List snapshot — no network calls, fully deterministic) to split a domain into `registrable_domain` (e.g. `evil-corp.co.uk` — correctly handling multi-label suffixes, which a naive "split on the last two dots" approach gets wrong), `subdomain` (e.g. `a1b2c3.tunnel`), and `scoring_label` — everything except the public suffix, which is what `calculate_entropy()` is actually run over. This directly addresses the "entropy diluted by a fixed low-entropy TLD" limitation from Phase 0/1: a DGA domain's randomness lives in the registrable-domain label, and a tunneling client's randomness lives in the subdomain — the suffix contributes nothing but noise to the score either way.
 
-**`dns_parsing.parse_dns_flags(dns)`** — translates the raw numeric DNS header fields into readable strings: `QR` (query vs. response), `Opcode`, `AA` (authoritative answer), `TC` (truncated), `RD`/`RA` (recursion desired/available), and `RCODE` (response/error code, e.g. `NOERROR`, `REFUSED`). Opcode/RCODE names are resolved via the `OPCODES`/`RCODES` dicts with an `UNKNOWN(<value>)` fallback for any value outside the commonly-used range, so a malformed or non-standard packet degrades gracefully instead of crashing the run (see §1.4a).
+**`dns_parsing.parse_dns_flags(dns)`** — translates the raw numeric DNS header fields into readable strings: `QR` (query vs. response), `Opcode`, `AA` (authoritative answer), `TC` (truncated), `RD`/`RA` (recursion desired/available), and `RCODE` (response/error code, e.g. `NOERROR`, `REFUSED`). Opcode/RCODE names are resolved via the `OPCODES`/`RCODES` dicts with an `UNKNOWN(<value>)` fallback for any value outside the commonly-used range, so a malformed or non-standard packet degrades gracefully instead of crashing the run (see §1.3a).
 
 #### 1.3a Fixed: opcode/rcode crash on uncommon values
 
@@ -282,7 +290,7 @@ Grouped by theme, roughly in order of impact-per-effort. You don't need all of t
 - ~~**Unit tests** (`pytest`)~~ **Done** — see `tests/` (95 cases across `test_dns_parsing.py`, `test_detection.py`, `test_threat_intel.py`, `test_config.py`, `test_cli.py`, `test_analysis.py`), including a real synthetic-pcap end-to-end test (`test_analysis.py::TestAnalyzePcapEndToEnd`) that closes the "still open" item this bullet used to name.
 - ~~**CI pipeline**~~ **Done** (Phase 1) — `.github/workflows/ci.yml` runs `ruff check` + `pytest` on every push/PR to `main`. **Still open:** type-checking (`mypy`) isn't wired in yet.
 - ~~**Type hints**~~ **Done** (Phase 1) — throughout.
-- ~~**Split into modules**~~ **Done** (Phase 3) — `dnspector/` package: `dns_parsing.py`, `detection.py`, `threat_intel.py`, `capture.py`, `analysis.py`, `report.py`, `config.py`, `cli.py` (see §1's module table). `dnspector.py` is now a thin backward-compatible shim. Deferred through Phase 1/2 as documented there; landed once Phase 3's threat-intel code made the single-file layout genuinely unwieldy (~630 lines before the split).
+- ~~**Split into modules**~~ **Done** (Phase 3) — 8 modules at the time (`dns_parsing.py`, `detection.py`, `threat_intel.py`, `capture.py`, `analysis.py`, `report.py`, `config.py`, `cli.py`); grown to 12 since (`live.py`/`alerting.py` in Phase 4, `syslog_forwarder.py`/`export.py` in Phase 5) - see §1's module table for the current, complete list. `dnspector.py` is a thin root-level entry shim. Deferred through Phase 1/2 as documented there; landed once Phase 3's threat-intel code made the single-file layout genuinely unwieldy (~630 lines before the split).
 - ~~**Config file**~~ **Done** (Phase 1, §1.1a) — JSON config via `--config`, `config.example.json`; CLI flags override it. API keys (URLhaus/VirusTotal) are deliberately *not* config-file keys — see §1.3d for why environment variables are preferred.
 
 ### 3.3 Live/streaming capability
@@ -298,8 +306,8 @@ Grouped by theme, roughly in order of impact-per-effort. You don't need all of t
 
 ### 3.5 Security-of-the-tool-itself (nice detail to mention)
 
-- Note explicitly (in code comments or docs) that the tool requires elevated privileges for raw packet capture, and that it should be run with the least privilege necessary (e.g. Linux capabilities rather than full root).
-- Mention DNS-over-HTTPS/DNS-over-TLS (DoH/DoT) as a known blind spot: encrypted DNS bypasses plaintext UDP:53 capture entirely, so a note on how you'd handle it (e.g. via TLS SNI inspection or endpoint-side logging) shows awareness of a real, current limitation of any DNS-based network monitoring tool.
+- ~~**Note explicitly that the tool requires elevated privileges for raw packet capture**, and that it should be run with the least privilege necessary.~~ **Done** (Phase 6, §4.1) — `SECURITY.md` now has a full threat-model section covering exactly this, plus the broader implication (elevated privileges turn any parsing bug into a privileged-process bug) rather than just noting the privilege requirement in isolation.
+- **Mention DNS-over-HTTPS/DNS-over-TLS (DoH/DoT) as a known blind spot** — still open: encrypted DNS bypasses plaintext UDP:53 capture entirely, so a note on how you'd handle it (e.g. via TLS SNI inspection or endpoint-side logging) shows awareness of a real, current limitation of any DNS-based network monitoring tool. Not yet added to `SECURITY.md`'s scope notes or anywhere else - a small, well-scoped documentation-only addition if you want to pick it up.
 
 ### 3.6 Suggested resume bullets (once 3–5 of the above are implemented)
 
@@ -312,17 +320,73 @@ Grouped by theme, roughly in order of impact-per-effort. You don't need all of t
 - *"Designed the live and batch detection pipelines to share their core per-record logic (packet parsing, threat-intel lookups, severity classification) while only the statistical-aggregation strategy differs between them - and documented the resulting numerical difference (online vs. full-batch baselining) as a deliberate tradeoff rather than an inconsistency."* — landed in Phase 4.
 - *"Added CI (GitHub Actions) with a 150+-case pytest suite covering entropy scoring, DNS flag parsing, statistical detection (batch and streaming), threat-intel and webhook-alerting provider logic (via dependency-injected fake fetchers/senders - zero real network calls in CI), packet capture (via a monkeypatched scapy sniff()), and end-to-end synthetic-pcap tests for both pipelines."*
 - *"Built CEF-formatted syslog forwarding for SIEM ingestion (Splunk/QRadar/ArcSight) and STIX 2.1 indicator export, verified against a real UDP syslog listener socket end-to-end (not just injected test fakes) before landing."* — landed in Phase 5.
+- *"Prepared the project for open-source contribution (CONTRIBUTING/CODE_OF_CONDUCT/SECURITY docs, issue/PR templates, a changelog, PyPI packaging metadata) and verified the packaging end-to-end by building and installing into a clean virtual environment rather than assuming the metadata was correct."* — landed in Phase 6.
+- *"Rebranded the project (DNSpector) once the roadmap's real scope justified a name change, executing the rename as a fully-inventoried mechanical change across the Python package, PyPI metadata, environment variables, outbound SIEM message identifiers, and every doc - re-verifying the full test suite and CI on GitHub's own runners afterward rather than assuming a rename couldn't break anything."* — landed in Phase 7.
 
 Interviewers respond much more to a couple of well-explained, real trade-offs ("I initially used a fixed entropy threshold, saw it false-positive on CDN subdomains, and moved to per-host baselining") than to a long unexplained feature list — the roadmap above is meant as a menu, not a checklist to fully clear.
 
 ---
 
-## 4. Why This Is a Valuable Cybersecurity Project (framing for interviews)
+## 4. Project Governance, Packaging & the Rename to DNSpector (Phases 6–7)
+
+Phases 0–5 were about the tool's capabilities. Phase 6 was about making the *project* - as a piece of open-source software, not just a script - genuinely contributor-ready and distributable. Phase 7 was renaming it once that scope was actually clear enough to name well. Both are covered here rather than in §1/§3 because neither one is about detection logic or code architecture - they're about how the project presents itself and how someone else would get involved with it.
+
+### 4.1 Contributor-facing documentation (Phase 6)
+
+- **`CONTRIBUTING.md`** covers dev setup, running tests, linting, and code conventions worth knowing before a PR (type hints throughout; dependency injection for anything network-touching, so tests never need a real network; settings bundled into small `@dataclass`es rather than growing function signatures; batch/live pipelines sharing per-record logic; and writing down known limitations honestly rather than glossing over them - the same standard this document tries to hold itself to). It also documents the **release process** for maintainers (see §4.2) and links to five real starter issues (§4.3) instead of just describing them in prose.
+- **`CODE_OF_CONDUCT.md`** is the standard [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct.html), unmodified except for the enforcement contact.
+- **`SECURITY.md`** goes beyond generic responsible-disclosure boilerplate to scope an actual threat model for *this* tool specifically:
+  - **Elevated privileges turn any parsing bug into a privileged-process bug.** Raw packet capture needs root/`CAP_NET_RAW`, so a vulnerability that lets captured data influence what the tool does *as a privileged process* (path traversal into where output files land, command injection, unsafe deserialization) is a serious, in-scope finding - not a generic "runs as root" complaint.
+  - **The tool parses untrusted network input** - every DNS packet is attacker-controllable if the attacker can reach a monitored network segment. Most parsing goes through `scapy` (report scapy bugs upstream), but this project's own decoding (`dns_parsing.py`, `detection.py`) is also in scope: a crash or hang triggerable by a crafted DNS packet is a real finding.
+  - **Third-party data egress is a real attack surface once threat-intel/alerting/syslog are enabled** - SSRF-style issues, API-key handling problems, or webhook/CEF-message injection are in scope; the fact that raw capture requires elevated privileges *at all* is explicitly called out as **not** a vulnerability (it's inherent to what raw packet capture is on every OS).
+- **GitHub issue templates** (`bug_report.md`, `feature_request.md`) plus a `config.yml` that redirects the "report a vulnerability" contact link to `SECURITY.md` instead of a public issue, and a **PR template** with a review checklist (tests pass, lint clean, docs updated if behavior changed).
+
+### 4.2 Packaging & distribution (Phase 6)
+
+- **`pyproject.toml`** gained real PyPI packaging metadata: a `[build-system]` table (`setuptools`), a `[project]` table (name, dependencies, classifiers, URLs), `[project.scripts]` (a `dnspector` console-script entry point), and `[tool.setuptools]`/`[tool.setuptools.dynamic]` configuring the version to be *read from* `dnspector/_version.py`'s `__version__` rather than duplicated as a second literal string in `pyproject.toml` - one source of truth, so a version bump can never update one file and silently miss the other.
+- **This was verified, not just asserted.** Before committing the packaging config, it was built and installed into a disposable virtual environment, `dnspector.__version__` was confirmed to resolve correctly (proving the dynamic-version wiring actually works, not just that the TOML parses), and the `dnspector` console-script entry point was confirmed to run - a leftover `build/` directory from that test is exactly the kind of artifact `.gitignore` now excludes.
+- **`.github/workflows/publish.yml`** builds an sdist+wheel and publishes to PyPI, but *only* when a GitHub Release is published (a deliberate, manual trigger - never on an ordinary push), using PyPI's [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (an OIDC token exchange) instead of a stored API-token secret. This workflow is **dormant infrastructure**: it does nothing until (a) the PyPI account owner does a one-time trusted-publisher configuration on pypi.org (documented step-by-step in `CONTRIBUTING.md`'s "Publishing a release" section - this specifically requires logging into pypi.org, which isn't something that can be done on someone's behalf), and (b) someone actually cuts a release. **Nothing has actually been published to PyPI** - reserving a package name is a real, external, one-way action, so setting up the infrastructure and verifying it end-to-end (short of actually publishing) was the right stopping point without the account owner's direct involvement.
+
+### 4.3 Repository configuration (Phase 6)
+
+- **GitHub Discussions** was off by default and is now enabled, for design conversations that don't need to be a formal issue.
+- **GitHub Issues was discovered to be off entirely** while trying to file starter-issue tickets - not just "no content yet," the feature itself was disabled repo-wide. Enabling it was a prerequisite discovered in the process, not a separately-planned step.
+- **Five real "good first issue"-labeled tickets** were filed, each tied to a genuine, previously-documented gap rather than invented busywork: wiring up `mypy` in CI, backporting the live-mode sliding-window burst tracker to batch mode, alert/syslog de-duplication, typosquatting detection, and a live dashboard. `CONTRIBUTING.md` links to the real issues directly.
+- **The CI badge** in `README.md` had already landed back in Phase 1, as a natural side effect of setting up `ci.yml` - noted here for completeness, not as new Phase 6 work.
+
+### 4.4 The rename to DNSpector (Phase 7)
+
+**Why now, and not earlier.** `PHASES.md` flagged naming as premature until the roadmap's real shape was clear. Picking a name too early risked two different failure modes: staying "DNS Analyzer" once the tool did far more than analyze (baselining, threat intel, live monitoring, SIEM export), or picking something too narrow (a tunneling-specific or DGA-specific name) before it was clear those would end up being two signals among several rather than the whole point of the tool.
+
+**The decision.** Six candidates were evaluated - DNSpector, Sentry53, DNSentinel, DNSleuth, TunnelTrace, DGAWatch (full rationale table in `PHASES.md` Phase 7) - on essentially one axis: does the name fit a general DNS threat-hunting tool, or does it lock in one narrow technique? That ruled out TunnelTrace and DGAWatch immediately. Between the remaining broad options, **DNSpector** was chosen as the most literal, unambiguous "what does this tool do" name, over the closer runner-up Sentry53. Both `dnspector` and `dns-analyzer`/`dns-analyser` (the prior name's two spellings) were confirmed unclaimed on PyPI before finalizing.
+
+**What the rename actually touched, mechanically** - listed in full because "renamed the project" undersells how many places a name lives in a real codebase:
+
+| Area | Before | After |
+|---|---|---|
+| Python package | `dns_analyzer/` | `dnspector/` (15 modules; every internal import updated) |
+| Root entry shim | `Dns_Analyser.py` | `dnspector.py` |
+| GitHub repository | `Dns-Analyser` | `DNSpector` (via `gh repo rename`; GitHub keeps the old URL as a redirect, but the local git remote was still explicitly repointed to the canonical URL rather than relying on that indefinitely) |
+| PyPI package name | `dns-analyzer` | `dnspector` (in `pyproject.toml`'s `[project]` table and console-script entry point) |
+| Webhook env var | `DNS_ANALYZER_WEBHOOK_URL` | `DNSPECTOR_WEBHOOK_URL` |
+| CEF identifiers (§1.3h) | `DNSAnalyzer` / `dns-analyzer` | `DNSpector` / `dnspector` - these are the vendor/product fields in every outbound SIEM message, so a SIEM rule matching on them needed to change too, not just cosmetic docs |
+| PDF report title | "DNS Traffic Analysis Report" | "DNSpector - DNS Traffic Analysis Report" |
+| Every cross-reference | — | `README.md`, this document, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, `PHASES.md`, `.github/` templates and workflows |
+| Demo assets | — | The README's screenshot and terminal-log snippet were **regenerated end-to-end under the renamed package**, not hand-edited - the screenshot came out byte-identical to before because it happens to capture a report page that never included the title text, which is itself a small confirmation that the rename didn't silently change any detection behavior |
+
+**Verification discipline carried through the rename itself**, matching how every other phase in this project has been verified rather than assumed correct: the full 190-case test suite was re-run and green after the rename, both entry points (`python dnspector.py` and `python -m dnspector`) were manually re-checked, and - beyond what's checkable locally - **GitHub Actions CI was confirmed green on GitHub's own runners** after pushing, closing the loop on whether the rename actually works outside this one sandboxed environment.
+
+**Deliberately not touched:** the local filesystem working-directory name (a machine-local detail, not part of the public project identity, and risky to change mid-session); backdating git tags for the pre-rename version history (`CHANGELOG.md` already records those versions under their original names; new tags will simply start from whatever ships next, under the new name).
+
+---
+
+## 5. Why This Is a Valuable Cybersecurity Project (framing for interviews)
 
 This project sits at the intersection of three skills employers specifically screen for in security-adjacent roles:
 
 1. **Protocol-level network understanding** — you're not calling a library's high-level "detect DGA" function; you're parsing raw DNS header fields and reasoning about why they matter.
 2. **Real attacker tradecraft knowledge** — DGA and DNS tunneling are genuinely used in the wild (APT C2 channels, ransomware callbacks, data exfiltration bypassing egress filtering), so this isn't a toy detection target.
 3. **Security tooling / blue-team workflow instincts** — capturing evidence (pcap), producing machine-readable output in formats a real SOC actually consumes (JSON, CSV, CEF-over-syslog, STIX) *and* a human-readable report (PDF), running inline detection with alerting instead of only after-the-fact analysis, and treating a live pipeline and a batch pipeline as two front-ends over the same core logic all mirror how real incident response and SOC tooling is expected to behave.
+4. **Software engineering / open-source stewardship** (§4) — a project's code is only part of "production-shaped." Threat-modeling the tool itself in `SECURITY.md` (not generic boilerplate - the actual attack surface: elevated privileges, untrusted-packet parsing, third-party data egress), verifying packaging by actually installing into a disposable environment rather than assuming a config file is correct, and executing a full rename with a checked mechanical inventory (§4.4's table) rather than a partial find-and-replace all demonstrate the same "verify, don't assume" discipline as the detection code itself.
 
-The gap between where the project is today (multi-signal detection, threat-intel enrichment, both batch and live pipelines, and SIEM-format export) and a fully "production-shaped" tool (§3 — cross-run persistence, a live dashboard, alert de-duplication) is exactly the kind of gap worth being explicit about — both in this doc and out loud in an interview.
+The gap between where the project is today (multi-signal detection, threat-intel enrichment, both batch and live pipelines, SIEM-format export, and real open-source packaging/governance) and a fully "production-shaped" tool (§3 — cross-run persistence, a live dashboard, alert de-duplication) is exactly the kind of gap worth being explicit about — both in this doc and out loud in an interview.
