@@ -65,13 +65,15 @@ This is the working roadmap for evolving the DNS Analyzer from a solid single-si
 
 ---
 
-## Phase 4 — Live/Streaming Capability
+## Phase 4 — Live/Streaming Capability ✅ *done*
 
 **Why:** currently capture and analysis are two disconnected phases; this makes the tool actually useful for live monitoring, not just after-the-fact forensics.
 
-- [ ] Move detection inline into `packet_handler()` instead of only running post-capture
-- [ ] Webhook alerting (Slack/Discord/email) on high-severity remarks
-- [ ] (Stretch) live dashboard (Streamlit or Flask + simple JS chart) showing query volume, top domains, entropy distribution, active alerts
+- [x] Move detection inline into `packet_handler()` instead of only running post-capture — `--live`; `capture_dns_packets()` gained an `on_packet` hook, `detection.LiveDetectionEngine` reimplements baselining/burst/NXDOMAIN-ratio as streaming algorithms (Welford's online mean/variance, a sliding-window burst tracker, a running ratio counter), `live.py` orchestrates the same shape of JSON/PDF output as batch mode
+- [x] Webhook alerting (Slack/Discord/email) on high-severity remarks — new `alerting.py`: `classify_severity()` + `WebhookAlerter`; `--enable-alerts`, `--webhook-url`/`DNS_ANALYZER_WEBHOOK_URL`, `--alert-min-severity` (info/medium/high/critical); works in both batch and live mode, sharing the same alerter
+- [ ] (Stretch) live dashboard (Streamlit or Flask + simple JS chart) showing query volume, top domains, entropy distribution, active alerts — not attempted, still a stretch goal
+
+*Landed 2026-08-20. New CLI flags: `--live`, `--enable-alerts`, `--webhook-url`, `--alert-min-severity`; `--duration 0` (or negative) now means "capture indefinitely until Ctrl+C" (works for both batch and live capture). Records gain a `severity` JSON field (`info`/`medium`/`high`/`critical`, always populated once detection runs, regardless of whether alerting is enabled). `capture_dns_packets()`'s `on_packet` hook is how live mode reuses the same, already-tested capture/error-handling code instead of duplicating it. `threat_intel.apply_threat_intel()` was split to expose a new `annotate_threat_intel()` single-record helper, reused by both the batch and live pipelines. Test suite grew from 95 to 153 cases, adding `tests/test_alerting.py`, `tests/test_capture.py` (via a monkeypatched `scapy.sniff()`), and `tests/test_live.py` (end-to-end live pipeline tests, same monkeypatching technique). Verified end-to-end with a real (non-mocked) engine run producing valid JSON/PDF output and correctly-timed inline webhook alerts. See DOCUMENTATION.md §1.2a/§1.3e/§1.3f for the full design writeup and §1.4 for new known limitations (live vs. batch z-score numerical difference, no alert de-duplication, synchronous `on_packet` capture-thread blocking).*
 
 ---
 
@@ -126,4 +128,6 @@ Leaning toward **DNSpector** or **Sentry53** if/when this happens, since the roa
 - *"Implemented a DNS-tunneling detector based on unique-subdomain-burst frequency per parent domain — a signal independent of any single query's entropy — plus per-client NXDOMAIN-ratio tracking for DGA-infected-host detection."* — Phase 2 ✅
 - *"Integrated OpenPhish/URLhaus/VirusTotal threat-intelligence feed lookups (with TTL caching and client-side rate limiting for VirusTotal's free tier) to convert heuristic alerts into confirmed IOC matches - opt-in, to keep an explicit boundary around what leaves the network."* — Phase 3 ✅
 - *"Refactored a 630-line single-file script into an 8-module package once feature growth made the single file unwieldy, keeping a backward-compatible CLI entry point throughout."* — Phase 3 ✅
-- *"Added CI (GitHub Actions) with a 95-case pytest suite covering entropy scoring, DNS flag parsing, statistical detection, threat-intel provider logic (via dependency-injected fake fetchers), and a synthetic-pcap end-to-end test."* — Phase 1 ✅ (test suite grown through Phase 0/2/3; CI wiring is Phase 1)
+- *"Built a live/streaming detection mode using Welford's online algorithm and a sliding-window burst tracker to run the same statistical anomaly detection inline during capture instead of only after it completes, plus opt-in Slack-/Discord-compatible webhook alerting with severity classification."* — Phase 4 ✅
+- *"Designed the live and batch detection pipelines to share their core per-record logic while only the statistical-aggregation strategy differs between them, and explicitly documented the resulting numerical difference (online vs. full-batch baselining) as a deliberate tradeoff."* — Phase 4 ✅
+- *"Added CI (GitHub Actions) with a 150+-case pytest suite covering entropy scoring, DNS flag parsing, statistical detection (batch and streaming), threat-intel/alerting provider logic (via dependency-injected fake fetchers/senders), packet capture (via a monkeypatched scapy sniff()), and end-to-end synthetic-pcap tests for both pipelines."* — Phase 1 ✅ (test suite grown through every phase; CI wiring is Phase 1)

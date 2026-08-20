@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from scapy.all import DNS, UDP, rdpcap
 
+from dns_analyzer.alerting import WebhookAlerter, classify_severity
 from dns_analyzer.detection import DetectionSettings, apply_detection_signals, build_dns_record
 from dns_analyzer.report import generate_pdf_report
 from dns_analyzer.threat_intel import ThreatIntelChecker, apply_threat_intel
@@ -20,16 +21,21 @@ def analyze_pcap(
     report_file: str,
     settings: Optional[DetectionSettings] = None,
     threat_intel_checker: Optional[ThreatIntelChecker] = None,
+    alerter: Optional[WebhookAlerter] = None,
 ) -> List[Dict[str, Any]]:
     """Analyze the captured DNS packets and save details to JSON and a PDF report.
 
-    Runs a three-pass pipeline over the packets in pcap_file:
+    Runs a pipeline over the packets in pcap_file:
       1. build_dns_record() per packet - pure, per-packet parsing.
       2. apply_detection_signals() over the full batch - statistical
          baselining, subdomain-burst detection, NXDOMAIN-ratio tracking.
       3. apply_threat_intel() (only if threat_intel_checker is given) -
          checks each record's registrable domain against threat-intel
          feeds; opt-in, since it sends observed domains to third parties.
+      4. Severity classification + optional webhook alerting (only if
+         alerter is given) - fires once analysis completes. For alerts
+         that go out the moment an anomaly is observed, use live capture
+         (dns_analyzer.live) instead.
     """
     settings = settings or DetectionSettings()
 
@@ -62,6 +68,15 @@ def analyze_pcap(
     if threat_intel_checker is not None:
         logger.info("Checking observed domains against threat-intel feeds...")
         records = apply_threat_intel(records, threat_intel_checker)
+
+    for record in records:
+        record["severity"] = classify_severity(record)
+
+    if alerter is not None:
+        for record in records:
+            severity = alerter.maybe_alert(record)
+            if severity:
+                logger.warning("[%s] %s -> %s", severity.upper(), record["query"], record["remark"])
 
     generate_pdf_report(records, report_file)
 

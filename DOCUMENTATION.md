@@ -11,15 +11,17 @@ The implementation lives in the `dns_analyzer/` package (split into modules duri
 | Module | Responsibility |
 |---|---|
 | `dns_parsing.py` | Pure DNS/domain parsing: `calculate_entropy`, `parse_domain`, `parse_dns_flags`, `format_flags` |
-| `detection.py` | Per-packet + batch-level anomaly detection: `build_dns_record`, `apply_detection_signals`, `DetectionSettings` |
-| `threat_intel.py` | OpenPhish/URLhaus/VirusTotal feed checks: `ThreatIntelChecker`, `apply_threat_intel`, `ThreatIntelSettings` |
-| `capture.py` | Live packet capture: `capture_dns_packets` |
-| `analysis.py` | Orchestrates the full pipeline: `analyze_pcap` |
+| `detection.py` | Per-packet + batch-level anomaly detection (`build_dns_record`, `apply_detection_signals`, `DetectionSettings`), plus streaming/incremental equivalents for live mode (`LiveDetectionEngine`, §1.3e) |
+| `threat_intel.py` | OpenPhish/URLhaus/VirusTotal feed checks: `ThreatIntelChecker`, `apply_threat_intel`/`annotate_threat_intel`, `ThreatIntelSettings` |
+| `alerting.py` | Severity classification + webhook alerting: `classify_severity`, `WebhookAlerter`, `AlertSettings` (§1.3f) |
+| `capture.py` | Packet capture: `capture_dns_packets` (batch, or with an inline `on_packet` callback for live mode) |
+| `analysis.py` | Orchestrates the batch pipeline: `analyze_pcap` |
+| `live.py` | Orchestrates the live/streaming pipeline: `capture_and_detect_live` (§1.2a) |
 | `report.py` | PDF rendering: `generate_pdf_report` |
 | `config.py` | JSON config file loading: `load_config` |
 | `cli.py` | `argparse` setup and the `main()` entry point |
 
-The tool runs in two sequential phases: **capture**, then **offline analysis**, orchestrated by `main()` (in `cli.py`).
+The tool runs in two sequential phases — **capture**, then **analysis** — either as a **batch** (the default: analysis only starts once capture finishes) or **live** (`--live`: analysis and alerting happen inline as each packet is captured). Both are orchestrated by `main()` (in `cli.py`); §1.2 covers batch, §1.2a covers live.
 
 ```mermaid
 flowchart LR
@@ -39,25 +41,46 @@ flowchart LR
     BU --> I
     NX --> I
     I --> TI["Pass 3 (opt-in): threat_intel.apply_threat_intel()\nOpenPhish / URLhaus / VirusTotal"]
-    TI --> J["output.json"]
-    TI --> K["dns_report.pdf via report.generate_pdf_report()"]
+    TI --> AL["severity classification +\nalerting.WebhookAlerter (opt-in)"]
+    AL --> J["output.json"]
+    AL --> K["dns_report.pdf via report.generate_pdf_report()"]
+```
+
+`--live` (§1.2a) replaces the capture-then-analyze split above with inline processing - each packet goes straight through detection (and threat-intel/alerting, if enabled) as it's captured, using `LiveDetectionEngine`'s incremental algorithms instead of the batch functions:
+
+```mermaid
+flowchart LR
+    A["CLI flags / config.json\ncli.parse_args(), --live"] --> M["cli.main()"]
+    M --> B["capture.capture_dns_packets(\n  on_packet=live.process_packet)"]
+    B --> S["scapy.sniff(prn=packet_handler)"]
+    S -->|"each DNS+UDP packet, live"| PP["live.process_packet(packet)"]
+    PP --> R["detection.build_dns_record(packet)"]
+    R --> LE["detection.LiveDetectionEngine.process(record)\nWelfordAccumulator / SubdomainBurstTracker / NxdomainRatioTracker"]
+    LE --> TI2["threat_intel.annotate_threat_intel()\n(opt-in, per record)"]
+    TI2 --> AL2["alerting.WebhookAlerter.maybe_alert()\n(opt-in, fires immediately)"]
+    AL2 -->|"accumulate"| REC[(records list)]
+    S -->|"capture ends\n(duration or Ctrl+C)"| DONE["write dns_capture.pcap"]
+    REC --> J2["output.json"]
+    REC --> K2["dns_report.pdf"]
 ```
 
 ### 1.1 Capture phase
 
-- `capture.capture_dns_packets(duration, iface, pcap_file)` uses Scapy's `sniff()` with a **BPF filter** `udp port 53`, so the OS-level packet filter — not Python — discards all non-DNS traffic before it ever reaches the script. This requires raw-socket access (root/administrator privileges, or `CAP_NET_RAW` on Linux); a `PermissionError`/`OSError` here is caught, logged with actionable guidance, and turned into a clean `exit(1)` instead of a raw traceback (see §1.3b).
-- The `packet_handler` callback Scapy invokes per captured packet is a **closure** local to `capture_dns_packets` (not a module-level global) — it double-checks the packet actually has both a `DNS` and `UDP` layer and appends it to a list scoped to that capture run. Keeping it a closure means running capture twice in the same process (e.g. in tests) can't leak state between runs.
-- After `timeout` seconds, if any packets were captured, `wrpcap()` writes them to `dns_capture.pcap` (or `--pcap-file`) — a **standard pcap file**, so it's also readable in Wireshark/tcpdump for manual inspection. If nothing was captured, a warning is logged and `main()` skips the analysis phase entirely rather than trying to analyze an empty/missing file.
+- `capture.capture_dns_packets(duration, iface, pcap_file, on_packet=None)` uses Scapy's `sniff()` with a **BPF filter** `udp port 53`, so the OS-level packet filter — not Python — discards all non-DNS traffic before it ever reaches the script. This requires raw-socket access (root/administrator privileges, or `CAP_NET_RAW` on Linux); a `PermissionError`/`OSError` here is caught, logged with actionable guidance, and turned into a clean `exit(1)` instead of a raw traceback (see §1.3b).
+- The `packet_handler` callback Scapy invokes per captured packet is a **closure** local to `capture_dns_packets` (not a module-level global) — it double-checks the packet actually has both a `DNS` and `UDP` layer, appends it to a list scoped to that capture run, and (Phase 4) calls the optional `on_packet` callback synchronously if one was given. Keeping it a closure means running capture twice in the same process (e.g. in tests) can't leak state between runs.
+- `on_packet` (Phase 4) is how `live.py`'s inline pipeline (§1.2a) plugs into the same, already-tested capture/error-handling code instead of duplicating it - the only difference between batch and live capture is whether this callback is set. It runs on the capture thread, so anything slow in it (a webhook call, say) delays processing of the next packet - `WebhookAlerter`'s network call is the one place this matters (see §1.4).
+- `duration <= 0` means capture indefinitely, passed to `sniff()` as `timeout=None`, until interrupted with Ctrl+C. Scapy's `sniff()` catches `KeyboardInterrupt` internally and returns the packets captured so far rather than propagating it, so this stops cleanly - useful for open-ended `--live` monitoring.
+- After capture ends, if any packets were captured, `wrpcap()` writes them to `dns_capture.pcap` (or `--pcap-file`) — a **standard pcap file**, so it's also readable in Wireshark/tcpdump for manual inspection. If nothing was captured, a warning is logged and `main()` skips the analysis phase entirely rather than trying to analyze an empty/missing file.
 
 ### 1.1a CLI, config file, and logging
 
-- `cli.parse_args()` builds an `argparse` parser with `--duration`, `--iface`, `--output-dir`, `--entropy-threshold`, plus the Phase 2 detection-threshold flags and the Phase 3 threat-intel flags (§1.3d). Run `python Dns_Analyser.py --help` for the full list.
+- `cli.parse_args()` builds an `argparse` parser with `--duration`, `--iface`, `--output-dir`, `--entropy-threshold`, plus the Phase 2 detection-threshold flags, the Phase 3 threat-intel flags (§1.3d), and the Phase 4 `--live`/`--enable-alerts`/`--webhook-url`/`--alert-min-severity` flags (§1.2a/§1.3f). Run `python Dns_Analyser.py --help` for the full list.
 - `--config <path>` points at a JSON file (see `config.example.json`) whose keys become the *defaults* for every other flag. Precedence is **CLI flag > config file > built-in default** — implemented via a two-pass parse: a lightweight `pre_parser` extracts just `--config` first (via `parse_known_args`), `config.load_config()` reads it, and those values seed the real parser's `default=` arguments before the full `argv` is parsed again.
 - All logging goes through Python's `logging` module. Each module gets its own logger via `logging.getLogger(__name__)` (e.g. `dns_analyzer.capture`, `dns_analyzer.threat_intel`) — standard hierarchical-logger practice, so log lines are traceable to their module and could be filtered per-module if needed. `cli.main()` configures the root handler once via `logging.basicConfig(level=..., format=...)` based on `--log-level`; every module's logger propagates up to it.
 
-### 1.2 Analysis phase
+### 1.2 Analysis phase (batch mode - the default)
 
-`analysis.analyze_pcap(pcap_file, json_file, report_file, settings, threat_intel_checker)` re-reads the pcap from disk (decoupling capture from analysis — you could swap in any pcap, not just one you just captured) and runs it through **up to three passes**:
+`analysis.analyze_pcap(pcap_file, json_file, report_file, settings, threat_intel_checker, alerter)` re-reads the pcap from disk (decoupling capture from analysis — you could swap in any pcap, not just one you just captured) and runs it through **up to four steps**:
 
 **Pass 1 — per-packet parsing.** For every DNS+UDP packet, `detection.build_dns_record(packet, entropy_threshold)` — a **pure function** — extracts `source_ip`/`destination_ip` from the IP layer, pulls the queried domain from the DNS Question section (`DNSQR.qname`), splits it into public-suffix-aware parts via `dns_parsing.parse_domain()`, scores entropy over the registrant-controlled label only (`calculate_entropy(domain_parts.scoring_label)`), and decodes the header flags via `parse_dns_flags()`. It returns `None` (and the packet is skipped, with a count logged afterward) if the packet has no IP layer — e.g. non-IPv4 traffic — rather than raising a `KeyError` (see §1.3b). The remark it sets is only a *provisional* one based on the fixed entropy threshold and flags.
 
@@ -65,7 +88,20 @@ flowchart LR
 
 **Pass 3 — threat intel (opt-in, only if a `threat_intel_checker` is passed).** `threat_intel.apply_threat_intel(records, checker)` (§1.3d) checks each record's registrable domain against OpenPhish/URLhaus/VirusTotal and appends a further note to `remark` on a confirmed match. This is a separate pass, not folded into Pass 2, because it's the only one that does real network I/O — keeping it isolated is what lets Pass 1/2 stay pure and fast to unit-test, and lets Pass 3 be skipped entirely (the default) without touching the rest of the pipeline.
 
+**Pass 4 — severity + alerting (opt-in, only if an `alerter` is passed).** Every record gets `record["severity"] = alerting.classify_severity(record)` (§1.3f) regardless of whether alerting is on - it's useful metadata for the JSON output either way (e.g. for a downstream SIEM). If an `alerter` was passed, `alerter.maybe_alert(record)` then fires a webhook for anything at or above `--alert-min-severity`, once analysis is complete. For alerts that fire the moment an anomaly is *observed* instead, use `--live` (§1.2a).
+
 The PDF is drawn (`report.generate_pdf_report()`) from the final, fully-annotated records: a block of text per record into a `reportlab` canvas, paginating (`c.showPage()`) once `y_position` runs below `y=100`. Finally, the records list is dumped to `output.json`. Keeping `build_dns_record()` and `apply_detection_signals()` free of I/O (network, disk, `reportlab`) is what makes them unit-testable with plain dicts and fake packets (see `tests/test_detection.py`).
+
+### 1.2a Analysis phase (live mode - `--live`, Phase 4)
+
+`live.capture_and_detect_live(duration, iface, pcap_file, json_file, report_file, settings, threat_intel_checker, alerter)` is the streaming equivalent of `analyze_pcap()`. Instead of capture-then-four-passes, it registers a single `process_packet` callback as `capture_dns_packets()`'s `on_packet` (§1.1) and runs the *entire* per-record pipeline inline, the moment each packet is captured:
+
+1. `detection.build_dns_record(packet, entropy_threshold)` — identical to batch Pass 1, unchanged.
+2. `detection.LiveDetectionEngine.process(record)` (§1.3e) — the streaming equivalent of batch Pass 2 (`apply_detection_signals()`), using incremental algorithms (Welford's online mean/variance, a sliding-window burst tracker, a running NXDOMAIN counter) instead of a full-batch rescan, since there's no "full batch" available yet in a live capture.
+3. `threat_intel.annotate_threat_intel(record, checker)` (opt-in) — the single-record version of batch Pass 3's `apply_threat_intel()`; both call the same underlying `ThreatIntelChecker.check()`, so caching/rate-limiting behavior is identical in both modes.
+4. `record["severity"] = classify_severity(record)`, then `alerter.maybe_alert(record)` (opt-in) — identical logic to batch Pass 4, just invoked per-record instead of once at the end. This is the actual payoff of live mode: an alert for a DNS-tunneling burst fires on the packet that crosses the threshold, not after the whole capture window closes.
+
+Every processed record is appended to an in-memory list; once capture ends (duration elapses, or Ctrl+C on an indefinite capture), that list is written to `output.json` and rendered to `dns_report.pdf` — **the exact same output shape as batch mode**, so downstream tooling doesn't need to know which mode produced a given report. The three underlying detection functions (`build_dns_record`, `annotate_threat_intel`, `classify_severity`) are literally shared between `analysis.py` and `live.py` - only the *aggregation* step (batch vs. incremental) differs. See §1.4 for the one place batch and live are numerically inconsistent (entropy z-scores) and why that's an intentional tradeoff, not a bug.
 
 ### 1.3 The detection logic, function by function
 
@@ -128,16 +164,39 @@ All four functions are pure (take/return plain dicts and primitives, no I/O), wh
 - **A real integration gotcha, found by testing the live API while building this**: URLhaus (abuse.ch) looks keyless in older documentation, but as of 2025 every request needs an `Auth-Key` header from a free account at `auth.abuse.ch` — calling it with no key returns a plain `401`, and with an invalid key returns `403 {"query_status": "unknown_auth_key"}`. Rather than ship an integration that silently 401s forever, `ThreatIntelChecker` checks `settings.urlhaus_api_key` is set *before* attempting a URLhaus call at all — no key means URLhaus is skipped cleanly, falling through to OpenPhish, instead of wasting a request (and a log line) on a call that can never succeed. VirusTotal needs an API key too (its free tier is documented as needing one, so this wasn't a surprise) and is additionally rate-limited client-side: `virustotal_min_interval_seconds` (default 15s, matching VT's ~4-requests/minute free-tier limit) and `virustotal_max_lookups_per_run` (default 20) bound how often and how many times VT gets called in one run — by **skipping** (not blocking/sleeping) once the limit is hit, so a run with many unique domains stays bounded in wall-clock time rather than potentially stalling for minutes.
 - All three provider fetchers (`_fetch_urlhaus`, `_fetch_openphish_feed`, `_fetch_virustotal`) are small, injectable functions — `ThreatIntelChecker`/`OpenPhishFeed` take them as constructor arguments with real-network defaults, so `tests/test_threat_intel.py` exercises the full order-of-providers/caching/rate-limiting logic with fake fetchers and a fake clock (`FakeClock`, an injectable `now_fn`), with **zero real network calls and zero real sleeping** — the whole 20-case test file runs in milliseconds. The real fetchers were separately verified by hand against the live APIs while building this (see `tests/test_analysis.py` for the synthetic end-to-end test, and the git history for the manual verification session).
 
+#### 1.3e Added: streaming/incremental detection primitives (Phase 4)
+
+Batch mode's `compute_host_baselines()`/`detect_subdomain_bursts()`/`compute_nxdomain_ratios()` (§1.3c) all need the *entire* set of records in memory to compute a statistic — fine for "analyze this pcap," impossible for "detect this as it happens." `detection.LiveDetectionEngine` reimplements the same three signals as **online algorithms** that update in O(1)-ish time and memory per record, deliberately reusing `HostEntropyBaseline`, `entropy_z_score()`, `NxdomainStats`, and `generate_remark()` from the batch code so both modes share the same scoring logic — only *how* the baseline/window/ratio is computed differs:
+
+- **`WelfordAccumulator`** — [Welford's online algorithm](https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm) for streaming mean/variance, the standard technique for computing a running mean and variance without storing every sample seen so far (only three running numbers: count, mean, and the sum of squared deviations `M2`). One per source host, created lazily.
+- **`SubdomainBurstTracker`** — a genuine **sliding window** per registrable domain (a `deque` of `(timestamp, subdomain)` pairs, evicting anything older than `window_seconds` on every observation), rather than batch mode's fixed time buckets. This is actually a *better* algorithm than the batch version — it doesn't have the hard-bucket-boundary problem documented as a batch-mode limitation (§1.4) — but wasn't backported to batch mode in this pass, to avoid destabilizing well-tested Phase 2 code for a phase that wasn't asking for it.
+- **`NxdomainRatioTracker`** — a simple running `[nxdomain_count, total_count]` per client, cumulative for the life of the tracker (i.e. for the whole live session) - the direct streaming analogue of the batch version's per-run aggregation.
+- **A deliberate, documented difference from batch mode**: `LiveDetectionEngine.process()` scores a record's entropy against the host's baseline **before** folding that record into the baseline (`accumulator.update()` happens after `entropy_z_score()`). Batch mode's `compute_host_baselines()` computes each host's baseline from *every* record for that host, including the one being scored — which numerically dampens an outlier's own effect on its mean/stdev. Scoring against prior history only is both the standard approach for online anomaly detection and the only causally sensible one for a real stream (you can't include a data point in a baseline before it's been fully processed) - but it means live and batch mode can produce a *different* z-score for the same underlying data. This is called out as a known limitation (§1.4), not silently glossed over.
+
+All three classes are pure/in-memory (no I/O), so `tests/test_detection.py`'s `TestWelfordAccumulator`/`TestSubdomainBurstTracker`/`TestNxdomainRatioTracker`/`TestLiveDetectionEngine` exercise them directly — including a test that explicitly locks in the "score-before-update" ordering above, so a future refactor can't silently flip it back to batch-style semantics.
+
+#### 1.3f Added: severity classification and webhook alerting (Phase 4)
+
+`alerting.py` turns a record's `remark` (and `threat_intel` verdict) into an actionable **severity** level, and optionally fires a webhook for anything at or above a configured threshold:
+
+- **`classify_severity(record)`** maps a record to one of `info` / `medium` / `high` / `critical`, by re-reading the fields the detection/threat-intel passes already computed — a confirmed threat-intel match is always `critical` (regardless of what else is true about the record); DGA/tunneling/z-score-anomaly/burst/NXDOMAIN-ratio remarks are `high`; refused/misconfigured responses are `medium`; everything else is `info`. Deliberately built on the *already-computed* `remark` string rather than re-deriving its own thresholds, so severity classification can't silently drift out of sync with `generate_remark()`'s own logic (the two are always talking about the same evidence).
+- **`WebhookAlerter.maybe_alert(record)`** sends a JSON payload to a Slack- or Discord-compatible incoming webhook URL if `classify_severity(record)` meets `--alert-min-severity` (default `high`). The payload includes both `"text"` (Slack's field name) and `"content"` (Discord's) with the same message, so one payload shape works for either platform without a separate "webhook style" setting — both ignore keys they don't recognize.
+- **Fails open, like threat intel.** A webhook timeout or HTTP error is logged as a warning and swallowed — `maybe_alert()` still returns the classified severity (so the caller's log line still reports what was found), it just means the *notification* didn't go out. Alerting is a side effect layered on top of detection, never something detection depends on succeeding.
+- **Alerting is available in both modes**, via the exact same `WebhookAlerter`/`classify_severity` — batch mode (`analysis.py`) calls `maybe_alert()` once per record after all four passes complete; live mode (`live.py`) calls it inline, the moment each record is finalized. The value proposition of `--live --enable-alerts` specifically is that the alert fires *while the anomaly is happening*, not after a capture window you had to wait out.
+- `sender` (in `WebhookAlerter`) and `fetch_fn`/`urlhaus_fetcher`/`virustotal_fetcher` (in `ThreatIntelChecker`) follow the same injectable-function pattern, which is why `tests/test_alerting.py` can exercise real severity/threshold/error-handling logic with **zero real network calls or webhook endpoints**.
+
 ### 1.4 Known limitations / rough edges (worth knowing before you demo this)
 
 - **Baselines are still fixed-threshold-first.** The global `--entropy-threshold` check still runs *before* the per-host z-score check (see the table in §1.3), so an operator who sets it too low will still get false positives that per-host baselining alone would have avoided. It's a deliberate safety net (don't let a genuinely extreme value slip through just because it matches a host's own noisy baseline), but it means the two signals aren't purely additive.
-- **Baselining and burst detection only see one capture at a time.** `compute_host_baselines()`/`detect_subdomain_bursts()`/`compute_nxdomain_ratios()` all operate on a single `analyze_pcap()` run's records — nothing persists across runs, so a slow, low-and-slow tunneling client that stays under the per-run burst threshold in *any single* capture window would be missed even if it's clearly anomalous across many runs. (Phase 4 — needs persistent state, not just a bigger window.)
-- **Two-phase, not streaming.** Detection only happens after the capture window ends; there's no live/real-time alerting yet. (Phase 4)
-- **Time-window bucketing is a hard boundary.** `detect_subdomain_bursts()` buckets by `floor(timestamp / window_seconds)`, so a burst that straddles a bucket boundary (e.g. half the queries land just before the boundary, half just after) can be split across two buckets and each half might fall under the unique-subdomain threshold even though the full burst wouldn't. A sliding window would fix this at the cost of more bookkeeping.
-- **`min_baseline_samples`/`min_nxdomain_samples` mean short captures get weaker detection.** A host that only sends 2-3 queries in a short demo capture won't get a z-score baseline or an NXDOMAIN ratio at all (falls back to the fixed threshold only) — this is intentional (too little data for a stable estimate) but worth knowing when demoing on a short capture window.
+- **Baselining and burst detection only see one capture (or one live session) at a time.** Nothing persists across separate *runs* of the tool (batch or live) — restart it and every host's baseline/burst-window/NXDOMAIN-ratio state resets to zero. A slow, low-and-slow tunneling client that stays under the threshold within any single run would be missed even if it's clearly anomalous across many runs. True cross-run persistence (a database or on-disk state file) is a further-out idea, not attempted here.
+- **Time-window bucketing is a hard boundary in batch mode.** `detect_subdomain_bursts()` buckets by `floor(timestamp / window_seconds)`, so a burst that straddles a bucket boundary can be split across two buckets and each half might fall under the unique-subdomain threshold even though the full burst wouldn't. Live mode's `SubdomainBurstTracker` (§1.3e) already fixes this with a genuine sliding window — the fix wasn't backported to batch mode in this pass, so the two modes' burst detection isn't quite the same algorithm.
+- **Live and batch mode can disagree on entropy z-scores for the same data.** As documented in §1.3e: live mode scores each record against its host's baseline *before* folding that record in, batch mode scores every record against a baseline computed from the whole batch *including itself*. Both are principled choices (the former is causally required for a stream; the latter is standard for a batch statistic), but don't expect identical z-scores re-running the same pcap through `--live` vs. the default batch mode.
+- **`min_baseline_samples`/`min_nxdomain_samples` mean short captures get weaker detection.** A host that only sends 2-3 queries in a short demo capture won't get a z-score baseline or an NXDOMAIN ratio at all (falls back to the fixed threshold only) — this is intentional (too little data for a stable estimate) but worth knowing when demoing on a short capture window. In `--live` mode this also means the *first* few queries from any host are necessarily unbaselined, no matter how long the session eventually runs.
 - **Threat intel needs API keys to be more than OpenPhish-only.** With `--enable-threat-intel` and no keys set, only the free OpenPhish feed is actually checked — URLhaus and VirusTotal both silently skip themselves (by design, see §1.3d) rather than fail loudly, which means it's easy to think you have three-provider coverage when you actually have one. Worth checking the "Threat-intel checks enabled (...)" log line at startup to confirm which providers are actually active.
 - **OpenPhish coverage is time-limited by design.** The free feed only lists *currently active* phishing URLs (a few hundred entries, refreshed continuously upstream) — it has no historical record, so a domain that was phishing last week and has since been taken down won't match. This is an OpenPhish product limitation, not something this integration can work around without a paid feed.
-- **Threat-intel verdicts aren't re-validated against the DNS answer.** A malicious verdict is based purely on the *queried domain string* — it doesn't check whether the response's answer records actually point somewhere consistent with that reputation (e.g. fast-flux domains that resolve differently every lookup). That correlation is listed as a further-out idea in §2.4/Phase 3, not attempted here.
+- **Threat-intel verdicts aren't re-validated against the DNS answer.** A malicious verdict is based purely on the *queried domain string* — it doesn't check whether the response's answer records actually point somewhere consistent with that reputation (e.g. fast-flux domains that resolve differently every lookup). That correlation is a further-out idea, not attempted here.
+- **Alerting has no de-duplication or backoff.** A host stuck in a persistent DGA-NXDOMAIN loop, or a live subdomain burst that keeps re-triggering every packet once past threshold, will fire one webhook call per qualifying record - `WebhookAlerter` doesn't debounce or rate-limit repeat alerts for the "same" ongoing incident the way, say, an alerting platform like PagerDuty would. For a noisy source this could mean a lot of webhook traffic; a cooldown-per-(host, alert-type) would be the natural next step.
+- **`on_packet` runs synchronously on the capture thread (live mode).** A slow `on_packet` callback - in practice, a slow webhook response inside `WebhookAlerter.maybe_alert()` - delays processing of the *next* captured packet, since `capture_dns_packets()` calls it inline from Scapy's `sniff()` callback. `request_timeout_seconds` (default 5s) bounds the worst case per alert, but a live session doing a lot of alerting on a busy network could still fall behind.
 
 None of this makes the project bad — it's a solid, now properly-scriptable protocol-analysis foundation — but naming these explicitly is exactly the kind of self-critique that makes a resume project credible in an interview ("I know the entropy threshold is naive; here's what I'd do instead...").
 
@@ -172,7 +231,7 @@ Shannon entropy is a cheap, explainable proxy for "does this string look random,
 
 ### 2.4 What this tool does *not* yet cover (the gap between "entropy check" and "DNS threat detection")
 
-Real DNS security tooling (e.g. enterprise DNS firewalls, Zeek's DNS analyzer, Cisco Umbrella) layers several signals together: entropy **and** query frequency/burstiness **and** reputation/threat-intel lookups **and** response characteristics (TTL anomalies, fast-flux IP rotation) **and** behavioral baselining per host. As of Phase 3, this project implements five of those layers — entropy (public-suffix-normalized), per-host behavioral baselining (z-score), query-frequency/burst analysis, basic response-characteristic tracking (NXDOMAIN ratio), and reputation/threat-intel lookups against OpenPhish/URLhaus/VirusTotal (§1.3d) — combined via `apply_detection_signals()` + `apply_threat_intel()`. What's still missing: TTL-anomaly and fast-flux IP-rotation detection (correlating a threat-intel verdict with the actual DNS *response*, not just the queried domain string — noted as a known limitation in §1.4), and any of it running live rather than only after a capture window ends (Phase 4).
+Real DNS security tooling (e.g. enterprise DNS firewalls, Zeek's DNS analyzer, Cisco Umbrella) layers several signals together: entropy **and** query frequency/burstiness **and** reputation/threat-intel lookups **and** response characteristics (TTL anomalies, fast-flux IP rotation) **and** behavioral baselining per host **and** running live rather than only after the fact. As of Phase 4, this project implements all but one of those layers — entropy (public-suffix-normalized), per-host behavioral baselining (z-score, batch *and* streaming), query-frequency/burst analysis (batch *and* streaming), basic response-characteristic tracking (NXDOMAIN ratio, batch *and* streaming), reputation/threat-intel lookups against OpenPhish/URLhaus/VirusTotal (§1.3d), and live/inline detection with webhook alerting (§1.2a/§1.3e/§1.3f). What's still missing: TTL-anomaly and fast-flux IP-rotation detection, and correlating a threat-intel verdict with the actual DNS *response* rather than just the queried domain string (both noted as known limitations in §1.4).
 
 ---
 
@@ -203,8 +262,8 @@ Grouped by theme, roughly in order of impact-per-effort. You don't need all of t
 
 ### 3.3 Live/streaming capability
 
-- **Real-time alerting** instead of capture-then-analyze: run detection inline in `packet_handler()` and push high-severity remarks to a webhook (Slack/Discord/email) the moment they occur.
-- **A live dashboard** (Streamlit or Flask + a simple JS chart) showing query volume, top domains, entropy distribution, and active alerts — this is a very demo-friendly addition (screenshots/GIFs matter a lot for a portfolio project).
+- ~~**Real-time alerting** instead of capture-then-analyze: run detection inline and push high-severity remarks to a webhook the moment they occur.~~ **Done** (Phase 4, §1.2a/§1.3f) — `--live` runs `LiveDetectionEngine` inline via `capture_dns_packets()`'s `on_packet` hook; `--enable-alerts` + `--webhook-url` fires a Slack-/Discord-compatible webhook per qualifying record (works in batch mode too, just after the run completes instead of inline). Known limitation: no alert de-duplication/cooldown yet (§1.4) — a persistent incident fires one webhook call per qualifying record.
+- **A live dashboard** (Streamlit or Flask + a simple JS chart) showing query volume, top domains, entropy distribution, and active alerts — this is a very demo-friendly addition (screenshots/GIFs matter a lot for a portfolio project). Still open — `--live` produces the underlying data (and even prints alert lines to the console as they happen), but there's no visual dashboard consuming it yet.
 
 ### 3.4 Interoperability / "plays well with a real SOC"
 
@@ -224,7 +283,9 @@ Grouped by theme, roughly in order of impact-per-effort. You don't need all of t
 - *"Implemented a query-frequency/burst detector that flags a parent domain receiving an unusual number of unique subdomains within a time window — a DNS-tunneling signal independent of any single query's entropy."* — landed in Phase 2.
 - *"Integrated OpenPhish/URLhaus/VirusTotal threat-intelligence feed lookups (with TTL caching and client-side rate limiting for VirusTotal's free tier) to convert heuristic alerts into confirmed IOC matches - opt-in, to keep an explicit boundary around what leaves the network."* — landed in Phase 3.
 - *"Refactored a 630-line single-file script into an 8-module package once feature growth (statistical detection + threat-intel integration) made the single file unwieldy, keeping a backward-compatible CLI entry point throughout."* — landed in Phase 3.
-- *"Added CI (GitHub Actions) with a 95-case pytest suite covering entropy scoring, DNS flag parsing, statistical detection, threat-intel provider logic (via dependency-injected fake fetchers - zero real network calls in CI), and a synthetic-pcap end-to-end test."*
+- *"Built a live/streaming detection mode using Welford's online algorithm and a sliding-window burst tracker to run the same statistical anomaly detection inline during capture instead of only after it completes, plus opt-in Slack-/Discord-compatible webhook alerting with severity classification."* — landed in Phase 4.
+- *"Designed the live and batch detection pipelines to share their core per-record logic (packet parsing, threat-intel lookups, severity classification) while only the statistical-aggregation strategy differs between them - and documented the resulting numerical difference (online vs. full-batch baselining) as a deliberate tradeoff rather than an inconsistency."* — landed in Phase 4.
+- *"Added CI (GitHub Actions) with a 150+-case pytest suite covering entropy scoring, DNS flag parsing, statistical detection (batch and streaming), threat-intel and webhook-alerting provider logic (via dependency-injected fake fetchers/senders - zero real network calls in CI), packet capture (via a monkeypatched scapy sniff()), and end-to-end synthetic-pcap tests for both pipelines."*
 
 Interviewers respond much more to a couple of well-explained, real trade-offs ("I initially used a fixed entropy threshold, saw it false-positive on CDN subdomains, and moved to per-host baselining") than to a long unexplained feature list — the roadmap above is meant as a menu, not a checklist to fully clear.
 
@@ -236,6 +297,6 @@ This project sits at the intersection of three skills employers specifically scr
 
 1. **Protocol-level network understanding** — you're not calling a library's high-level "detect DGA" function; you're parsing raw DNS header fields and reasoning about why they matter.
 2. **Real attacker tradecraft knowledge** — DGA and DNS tunneling are genuinely used in the wild (APT C2 channels, ransomware callbacks, data exfiltration bypassing egress filtering), so this isn't a toy detection target.
-3. **Security tooling / blue-team workflow instincts** — capturing evidence (pcap), producing a structured machine-readable output (JSON) *and* a human-readable report (PDF) mirrors how real incident response and SOC tooling is expected to behave.
+3. **Security tooling / blue-team workflow instincts** — capturing evidence (pcap), producing a structured machine-readable output (JSON) *and* a human-readable report (PDF), running inline detection with alerting instead of only after-the-fact analysis, and treating a live pipeline and a batch pipeline as two front-ends over the same core logic all mirror how real incident response and SOC tooling is expected to behave.
 
-The gap between where the project is today (a solid single-signal detector) and a "production-shaped" tool (§3) is exactly the kind of gap worth being explicit about — both in this doc and out loud in an interview.
+The gap between where the project is today (multi-signal detection, threat-intel enrichment, and both batch and live pipelines) and a fully "production-shaped" tool (§3 — SIEM interoperability, cross-run persistence, a live dashboard) is exactly the kind of gap worth being explicit about — both in this doc and out loud in an interview.

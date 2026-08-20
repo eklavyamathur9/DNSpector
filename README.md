@@ -14,6 +14,8 @@ The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze
 - **Subdomain-burst (DNS Tunneling) Detection**: Flags a parent domain receiving an unusually high number of *unique* subdomain queries within a short time window - a signal independent of any single query's entropy.
 - **NXDOMAIN-ratio Tracking**: Flags a host whose DNS responses are mostly failed lookups (NXDOMAIN) - a classic sign of a DGA-infected client cycling through candidate C2 domains.
 - **Threat-Intel Enrichment** (opt-in): Checks observed domains against [OpenPhish](https://openphish.com/) (free, keyless), [URLhaus](https://urlhaus.abuse.ch/) (free, needs an Auth-Key), and [VirusTotal](https://www.virustotal.com/) (needs an API key), turning a heuristic "looks suspicious" verdict into a confirmed "is on a real-world blocklist" one.
+- **Live/Streaming Mode** (opt-in): Runs detection inline as each packet arrives (`--live`), using incremental/streaming versions of the same algorithms, instead of only after the whole capture window ends.
+- **Webhook Alerting** (opt-in): Sends a Slack-/Discord-compatible webhook alert for records at or above a configurable severity - most useful combined with `--live`, so alerts fire the moment an anomaly is observed.
 - **DNS Flag Parsing**: Decodes DNS flags into human-readable formats.
 - **Detailed Reporting**:
     - **JSON Output**: Saves analysis results, including all detection signals, in a structured JSON file.
@@ -101,6 +103,29 @@ sudo -E python Dns_Analyser.py --enable-threat-intel
 
 ---
 
+## Live Mode & Alerting (opt-in)
+
+By default the tool captures for the full duration, *then* analyzes everything at once. `--live` switches to inline detection - each packet is scored (and, if threat-intel/alerting are enabled, checked/alerted on) the moment it's captured, using streaming versions of the same statistical algorithms:
+
+```bash
+sudo python Dns_Analyser.py --live --duration 120
+```
+
+Pass `--duration 0` (or any non-positive value) to capture indefinitely until you stop it with Ctrl+C - useful for `--live` monitoring that isn't tied to a fixed window. The same JSON/PDF output is written once capture ends either way.
+
+Combine with webhook alerting to get notified as anomalies are found, rather than only after the run finishes:
+
+```bash
+export DNS_ANALYZER_WEBHOOK_URL="https://hooks.slack.com/services/..."  # or a Discord webhook URL
+sudo -E python Dns_Analyser.py --live --enable-alerts --alert-min-severity high
+```
+
+Alerting also works in the default (non-`--live`) batch mode - alerts just fire once analysis completes rather than in real time. Severity is one of `info` / `medium` / `high` / `critical` (a confirmed threat-intel match is always `critical`); `--alert-min-severity` controls the cutoff.
+
+**Note on live mode's statistics:** because live mode can't see the whole capture up front, its per-host entropy baseline is built incrementally (Welford's online algorithm) and scores each new query against *prior* history only - not the same computation as batch mode's full-batch baseline, though both use the same z-score logic. See [DOCUMENTATION.md](DOCUMENTATION.md) for the full explanation.
+
+---
+
 ## Project Structure
 
 The implementation lives in the `dns_analyzer/` package, split by concern:
@@ -108,10 +133,12 @@ The implementation lives in the `dns_analyzer/` package, split by concern:
 | Module | Responsibility |
 |---|---|
 | `dns_parsing.py` | Pure DNS/domain parsing: entropy, public-suffix splitting, flag decoding |
-| `detection.py` | Per-packet + batch-level anomaly detection (baselining, bursts, NXDOMAIN ratio) |
+| `detection.py` | Per-packet + batch-level anomaly detection (baselining, bursts, NXDOMAIN ratio), plus streaming/incremental equivalents for live mode |
 | `threat_intel.py` | OpenPhish/URLhaus/VirusTotal feed checks, caching, rate limiting |
-| `capture.py` | Live packet capture via scapy |
-| `analysis.py` | Orchestrates the full pcap-in, JSON+PDF-out pipeline |
+| `alerting.py` | Severity classification + webhook alerting |
+| `capture.py` | Packet capture via scapy (batch or with an inline callback for live mode) |
+| `analysis.py` | Orchestrates the batch pcap-in, JSON+PDF-out pipeline |
+| `live.py` | Orchestrates the live/streaming capture-detect-alert pipeline |
 | `report.py` | PDF report rendering |
 | `config.py` | JSON config file loading |
 | `cli.py` | Argument parsing and the `main()` entry point |
@@ -122,7 +149,7 @@ The implementation lives in the `dns_analyzer/` package, split by concern:
 
 ## Running Tests
 
-The full detection pipeline - entropy scoring, DNS flag parsing, statistical baselining, burst/NXDOMAIN detection, threat-intel checks (via injected fake fetchers, no real network calls), CLI parsing, and an end-to-end synthetic-pcap test - is covered by a `pytest` suite in `tests/`, organized to mirror the `dns_analyzer/` package.
+The full pipeline - entropy scoring, DNS flag parsing, statistical baselining (batch and streaming), burst/NXDOMAIN detection (batch and streaming), threat-intel checks and webhook alerting (via injected fake fetchers/senders, no real network calls), CLI parsing, packet capture (via a monkeypatched `sniff()`), and end-to-end synthetic-pcap tests for both batch and live pipelines - is covered by a `pytest` suite in `tests/`, organized to mirror the `dns_analyzer/` package.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -144,7 +171,7 @@ pytest tests/ -v
 - **High Entropy Domains**: Indicates potential DNS tunneling or DGA (Domain Generation Algorithm) activity, either via a fixed threshold or a per-host statistical outlier (z-score).
 - **Subdomain Bursts**: Many unique subdomains queried under one parent domain in a short window - a DNS tunneling indicator independent of entropy.
 - **High NXDOMAIN Ratio**: A host whose responses are mostly failed lookups - a classic DGA-infected-client indicator.
-- **Threat-Intel Match**: A domain confirmed against a real-world blocklist (OpenPhish/URLhaus/VirusTotal), if `--enable-threat-intel` is set.
+- **Threat-Intel Match**: A domain confirmed against a real-world blocklist (OpenPhish/URLhaus/VirusTotal), if `--enable-threat-intel` is set - always classified `critical` severity.
 - **Refused Queries**: Highlights DNS queries refused by the server.
 - **Unsuccessful Responses**: Identifies misconfigurations or potential attacks.
 

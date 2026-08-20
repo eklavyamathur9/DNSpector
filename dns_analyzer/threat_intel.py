@@ -288,23 +288,32 @@ class ThreatIntelChecker:
         return None
 
 
+def annotate_threat_intel(record: Dict[str, Any], checker: ThreatIntelChecker) -> Dict[str, Any]:
+    """Annotate a single record with a threat-intel verdict for its
+    registrable domain. checker.check() caches internally, so repeated
+    domains (across many calls, batch or live) only trigger one real
+    provider lookup. No-op if the record has no registrable domain.
+    """
+    domain = record.get("registrable_domain")
+    if not domain:
+        return record
+
+    verdict = checker.check(domain)
+    record["threat_intel"] = asdict(verdict)
+    if verdict.is_malicious:
+        record["remark"] += f" | domain matches {verdict.source} threat intel: {verdict.detail}"
+
+    return record
+
+
 def apply_threat_intel(
     records: List[Dict[str, Any]],
     checker: ThreatIntelChecker,
 ) -> List[Dict[str, Any]]:
-    """Annotate each record with a threat-intel verdict for its
-    registrable domain. checker.check() caches internally, so repeated
-    domains within the same batch only trigger one real provider lookup.
-    Records with no registrable domain are left with threat_intel=None.
+    """Batch version of annotate_threat_intel() - annotates every record
+    in a list. Used by the batch analysis pipeline; live capture calls
+    annotate_threat_intel() directly, one record at a time, as it arrives.
     """
     for record in records:
-        domain = record.get("registrable_domain")
-        if not domain:
-            continue
-
-        verdict = checker.check(domain)
-        record["threat_intel"] = asdict(verdict)
-        if verdict.is_malicious:
-            record["remark"] += f" | domain matches {verdict.source} threat intel: {verdict.detail}"
-
+        annotate_threat_intel(record, checker)
     return records

@@ -6,6 +6,10 @@ from scapy.all import DNS, DNSQR, IP, UDP
 from dns_analyzer.detection import (
     DetectionSettings,
     HostEntropyBaseline,
+    LiveDetectionEngine,
+    NxdomainRatioTracker,
+    SubdomainBurstTracker,
+    WelfordAccumulator,
     apply_detection_signals,
     build_dns_record,
     compute_host_baselines,
@@ -307,3 +311,149 @@ class TestApplyDetectionSignals:
         records = [make_record(entropy=1.0) for _ in range(3)]
         result = apply_detection_signals(records, DetectionSettings(entropy_threshold=3.5))
         assert all(r["remark"] == "Normal query" for r in result)
+
+
+class TestWelfordAccumulator:
+    def test_matches_batch_mean_and_stdev(self):
+        values = [1.0, 2.0, 3.0, 2.0, 1.0]
+        acc = WelfordAccumulator()
+        for v in values:
+            acc.update(v)
+        assert acc.count == 5
+        assert acc._mean == pytest.approx(statistics.mean(values))
+        assert acc.stdev == pytest.approx(statistics.pstdev(values))
+
+    def test_baseline_none_below_min_samples(self):
+        acc = WelfordAccumulator()
+        for v in [1.0, 2.0, 3.0]:
+            acc.update(v)
+        assert acc.baseline(min_samples=5) is None
+
+    def test_baseline_available_once_min_samples_reached(self):
+        acc = WelfordAccumulator()
+        for v in [1.0, 2.0, 3.0, 2.0, 1.0]:
+            acc.update(v)
+        baseline = acc.baseline(min_samples=5)
+        assert baseline is not None
+        assert baseline.sample_count == 5
+        assert baseline.mean == pytest.approx(1.8)
+
+    def test_zero_or_one_samples_has_zero_stdev(self):
+        acc = WelfordAccumulator()
+        assert acc.stdev == 0.0
+        acc.update(5.0)
+        assert acc.stdev == 0.0
+
+
+class TestSubdomainBurstTracker:
+    def test_unique_count_increases_with_distinct_subdomains(self):
+        tracker = SubdomainBurstTracker(window_seconds=60)
+        counts = [
+            tracker.observe("evil.com", f"chunk{i}", timestamp=1000.0 + i) for i in range(5)
+        ]
+        assert counts == [1, 2, 3, 4, 5]
+
+    def test_repeated_subdomain_does_not_increase_unique_count(self):
+        tracker = SubdomainBurstTracker(window_seconds=60)
+        tracker.observe("evil.com", "same", timestamp=1000.0)
+        count = tracker.observe("evil.com", "same", timestamp=1001.0)
+        assert count == 1
+
+    def test_domains_tracked_independently(self):
+        tracker = SubdomainBurstTracker(window_seconds=60)
+        tracker.observe("evil.com", "a", timestamp=1000.0)
+        tracker.observe("evil.com", "b", timestamp=1001.0)
+        count = tracker.observe("other.com", "c", timestamp=1002.0)
+        assert count == 1
+
+    def test_old_entries_evicted_outside_window(self):
+        tracker = SubdomainBurstTracker(window_seconds=60)
+        tracker.observe("evil.com", "old1", timestamp=1000.0)
+        tracker.observe("evil.com", "old2", timestamp=1001.0)
+        # far beyond the 60s window - old entries should be evicted
+        count = tracker.observe("evil.com", "new", timestamp=2000.0)
+        assert count == 1
+
+
+class TestNxdomainRatioTracker:
+    def test_computes_running_ratio(self):
+        tracker = NxdomainRatioTracker()
+        tracker.observe("9.9.9.9", is_nxdomain=True)
+        tracker.observe("9.9.9.9", is_nxdomain=True)
+        stats = tracker.observe("9.9.9.9", is_nxdomain=False)
+        assert stats.sample_count == 3
+        assert stats.ratio == pytest.approx(2 / 3)
+
+    def test_clients_tracked_independently(self):
+        tracker = NxdomainRatioTracker()
+        tracker.observe("1.1.1.1", is_nxdomain=True)
+        stats_2 = tracker.observe("2.2.2.2", is_nxdomain=False)
+        assert stats_2.sample_count == 1
+        assert stats_2.ratio == 0.0
+
+
+class TestLiveDetectionEngine:
+    def test_normal_traffic_stays_normal(self):
+        engine = LiveDetectionEngine(DetectionSettings(entropy_threshold=3.5))
+        records = [make_record(entropy=1.0) for _ in range(3)]
+        results = [engine.process(r) for r in records]
+        assert all(r["remark"] == "Normal query" for r in results)
+
+    def test_flags_high_entropy_outlier_after_baseline_forms(self):
+        engine = LiveDetectionEngine(
+            DetectionSettings(entropy_threshold=10.0, z_score_threshold=2.0, min_baseline_samples=5)
+        )
+        # feed 5 low-variance (but not zero-variance) records to form a
+        # baseline for this host first - a zero-variance baseline can't
+        # produce a z-score at all (see test_baseline_excludes_the_record_being_scored)
+        for i, entropy in enumerate([0.9, 1.1, 1.0, 0.95, 1.05]):
+            engine.process(make_record(source_ip="1.1.1.1", entropy=entropy, registrable_domain=f"site{i}.com"))
+        # then a clear outlier from the same host
+        outlier = engine.process(make_record(source_ip="1.1.1.1", entropy=5.0, registrable_domain="site9.com"))
+        assert outlier["entropy_z_score"] is not None
+        assert outlier["entropy_z_score"] > 2.0
+        assert "anomalous" in outlier["remark"].lower()
+
+    def test_baseline_excludes_the_record_being_scored(self):
+        # unlike batch mode (which includes each record in its own
+        # baseline), live mode scores against prior history only - so an
+        # outlier's z-score should be computed from the baseline *before*
+        # that outlier is folded in.
+        engine = LiveDetectionEngine(
+            DetectionSettings(entropy_threshold=10.0, z_score_threshold=0.0, min_baseline_samples=5)
+        )
+        for _ in range(5):
+            engine.process(make_record(source_ip="1.1.1.1", entropy=1.0))
+        outlier = engine.process(make_record(source_ip="1.1.1.1", entropy=5.0))
+        # z-score computed from mean=1.0, stdev=0.0 (all prior samples identical) -> None,
+        # since a zero-variance baseline can't produce a meaningful z-score
+        assert outlier["entropy_z_score"] is None
+
+    def test_flags_subdomain_burst(self):
+        engine = LiveDetectionEngine(
+            DetectionSettings(entropy_threshold=10.0, burst_window_seconds=60, burst_unique_subdomain_threshold=5)
+        )
+        results = [
+            engine.process(
+                make_record(registrable_domain="evil.com", subdomain=f"chunk{i}", timestamp=1000.0 + i, entropy=1.0)
+            )
+            for i in range(5)
+        ]
+        assert results[-1]["subdomain_burst"] is True
+        assert results[-1]["subdomain_burst_unique_count"] == 5
+        assert "tunneling" in results[-1]["remark"].lower()
+        # earlier records, before the threshold was reached, aren't flagged
+        assert results[0]["subdomain_burst"] is False
+
+    def test_flags_high_nxdomain_ratio_host(self):
+        engine = LiveDetectionEngine(
+            DetectionSettings(entropy_threshold=10.0, nxdomain_ratio_threshold=0.5, min_nxdomain_samples=5)
+        )
+        results = [
+            engine.process(
+                make_record(destination_ip="192.168.1.50", qr="RESPONSE", rcode="NXDOMAIN", entropy=1.0)
+            )
+            for _ in range(5)
+        ]
+        assert results[-1]["host_nxdomain_ratio"] == pytest.approx(1.0)
+        assert "nxdomain" in results[-1]["remark"].lower()

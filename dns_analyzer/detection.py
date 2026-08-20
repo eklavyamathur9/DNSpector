@@ -9,10 +9,11 @@ writeup.
 """
 
 import logging
+import math
 import statistics
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Deque, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from scapy.all import DNS, DNSQR, IP, Packet
 
@@ -116,6 +117,7 @@ def build_dns_record(packet: Packet, entropy_threshold: float) -> Optional[Dict[
         "subdomain_burst_unique_count": None,
         "host_nxdomain_ratio": None,
         "threat_intel": None,
+        "severity": None,
         "remark": remark,
     }
 
@@ -263,3 +265,157 @@ def apply_detection_signals(
         record["remark"] = remark
 
     return records
+
+
+# --- Streaming/incremental equivalents (Phase 4 - live capture) ------------
+#
+# apply_detection_signals() above needs the *entire* batch in memory to
+# compute baselines/bursts/ratios, which only works once a capture is
+# complete. For live capture there is no "complete batch" - detection has
+# to happen as each packet arrives, using O(1)-ish incremental algorithms
+# instead of re-scanning everything seen so far. These deliberately reuse
+# HostEntropyBaseline/entropy_z_score/NxdomainStats/generate_remark from
+# above so live and batch mode share the same scoring logic - only *how*
+# the baseline/window/ratio is computed differs.
+
+
+class WelfordAccumulator:
+    """Streaming mean/variance via Welford's online algorithm - O(1) time
+    and memory per update, unlike compute_host_baselines() which needs
+    every record kept in memory to recompute statistics.mean/pstdev.
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self._mean = 0.0
+        self._m2 = 0.0
+
+    def update(self, value: float) -> None:
+        self.count += 1
+        delta = value - self._mean
+        self._mean += delta / self.count
+        delta2 = value - self._mean
+        self._m2 += delta * delta2
+
+    @property
+    def stdev(self) -> float:
+        if self.count < 2:
+            return 0.0
+        return math.sqrt(self._m2 / self.count)  # population stdev, matching statistics.pstdev
+
+    def baseline(self, min_samples: int) -> Optional[HostEntropyBaseline]:
+        if self.count < min_samples:
+            return None
+        return HostEntropyBaseline(mean=self._mean, stdev=self.stdev, sample_count=self.count)
+
+
+class SubdomainBurstTracker:
+    """Rolling-window unique-subdomain-count tracker per registrable
+    domain. Unlike detect_subdomain_bursts()'s fixed time buckets (which
+    can split one burst across two buckets at a boundary - a documented
+    batch-mode limitation), this is a genuine sliding window: each
+    observation evicts entries older than window_seconds before counting.
+    """
+
+    def __init__(self, window_seconds: float) -> None:
+        self.window_seconds = window_seconds
+        self._windows: Dict[str, Deque[Tuple[float, str]]] = defaultdict(deque)
+
+    def observe(self, registrable_domain: str, subdomain: str, timestamp: float) -> int:
+        """Record an observation and return the current unique-subdomain
+        count within the trailing window for that registrable domain."""
+        window = self._windows[registrable_domain]
+        window.append((timestamp, subdomain))
+        cutoff = timestamp - self.window_seconds
+        while window and window[0][0] < cutoff:
+            window.popleft()
+        return len({sub for _, sub in window})
+
+
+class NxdomainRatioTracker:
+    """Running (cumulative, for the life of the tracker) NXDOMAIN ratio
+    per client - the streaming equivalent of compute_nxdomain_ratios().
+    """
+
+    def __init__(self) -> None:
+        self._counts: Dict[str, List[int]] = defaultdict(lambda: [0, 0])  # [nxdomain, total]
+
+    def observe(self, client_ip: str, is_nxdomain: bool) -> NxdomainStats:
+        counts = self._counts[client_ip]
+        counts[1] += 1
+        if is_nxdomain:
+            counts[0] += 1
+        return NxdomainStats(ratio=counts[0] / counts[1], sample_count=counts[1])
+
+
+class LiveDetectionEngine:
+    """Incremental, per-record equivalent of apply_detection_signals().
+
+    Call process(record) once per parsed record, in arrival order; each
+    call mutates and returns the record with entropy_z_score/subdomain_
+    burst/host_nxdomain_ratio/remark filled in, using only the state
+    accumulated so far - never a full-batch rescan.
+
+    One deliberate difference from batch mode: a record's own entropy is
+    scored against the host's baseline *before* that record is folded
+    into the baseline (update() happens after scoring). Batch mode scores
+    every record against a baseline computed from the *entire* batch,
+    including itself, which numerically dampens outliers pulling their
+    own mean/stdev up. Scoring against prior history only is both the
+    more standard approach for online anomaly detection and the only
+    causally sensible one for a live stream - but it means live and batch
+    can produce a different z-score for the same data. See
+    DOCUMENTATION.md for the full writeup.
+    """
+
+    def __init__(self, settings: DetectionSettings) -> None:
+        self.settings = settings
+        self._host_baselines: Dict[str, WelfordAccumulator] = defaultdict(WelfordAccumulator)
+        self._burst_tracker = SubdomainBurstTracker(settings.burst_window_seconds)
+        self._nxdomain_tracker = NxdomainRatioTracker()
+
+    def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        is_query = record["flags"]["qr"] == "QUERY"
+        z_score = None
+
+        if is_query:
+            accumulator = self._host_baselines[record["source_ip"]]
+            baseline = accumulator.baseline(self.settings.min_baseline_samples)
+            z_score = entropy_z_score(record["entropy"], baseline)
+            accumulator.update(record["entropy"])
+
+        record["entropy_z_score"] = z_score
+        remark = generate_remark(
+            record["entropy"], record["flags"], self.settings.entropy_threshold,
+            z_score=z_score, z_score_threshold=self.settings.z_score_threshold,
+        )
+        notes: List[str] = []
+
+        if is_query and record["registrable_domain"] and record["subdomain"]:
+            unique_count = self._burst_tracker.observe(
+                record["registrable_domain"], record["subdomain"], record["timestamp"]
+            )
+            if unique_count >= self.settings.burst_unique_subdomain_threshold:
+                record["subdomain_burst"] = True
+                record["subdomain_burst_unique_count"] = unique_count
+                notes.append(
+                    f"{unique_count} unique subdomains under {record['registrable_domain']} "
+                    f"within {self.settings.burst_window_seconds}s - possible DNS tunneling"
+                )
+
+        if not is_query:
+            is_nxdomain = record["flags"]["rcode"] == "NXDOMAIN"
+            nx_stats = self._nxdomain_tracker.observe(record["destination_ip"], is_nxdomain)
+            if nx_stats.sample_count >= self.settings.min_nxdomain_samples:
+                record["host_nxdomain_ratio"] = nx_stats.ratio
+                if nx_stats.ratio >= self.settings.nxdomain_ratio_threshold:
+                    notes.append(
+                        f"host {record['destination_ip']} has a high NXDOMAIN ratio "
+                        f"({nx_stats.ratio:.0%} of {nx_stats.sample_count} responses) - "
+                        f"possible DGA client"
+                    )
+
+        if notes:
+            remark = remark + " | " + " | ".join(notes)
+        record["remark"] = remark
+        return record
