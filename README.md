@@ -18,7 +18,9 @@ The **DNS Traffic Analyzer** is a Python-based tool designed to capture, analyze
 
 ## Documentation
 
-For a deep dive into how the capture/analysis pipeline works internally, the DNS/security theory behind the entropy and flag-based detection, known limitations, and a concrete roadmap for extending this into a more advanced security tool (with resume-ready framing), see **[DOCUMENTATION.md](DOCUMENTATION.md)**.
+For a deep dive into how the capture/analysis pipeline works internally, the DNS/security theory behind the entropy and flag-based detection, and known limitations, see **[DOCUMENTATION.md](DOCUMENTATION.md)**.
+
+For the ordered, checklist-driven plan for evolving this project (engineering hardening, detection-quality improvements, threat-intel integration, and eventual open-sourcing), see **[PHASES.md](PHASES.md)**.
 
 ---
 
